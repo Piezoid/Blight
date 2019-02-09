@@ -26,43 +26,36 @@ using namespace chrono;
 
 
 static inline kmer nuc2int(char c){
-	switch(c){
-		/*
-		case 'a': return 0;
-		case 'c': return 1;
-		case 'g': return 2;
-		case 't': return 3;
-		*/
-		case 'A': return 0;
-		case 'C': return 1;
-		case 'G': return 2;
-		case 'T': return 3;
-		case 'N': return 0;
+	if(likely(c == 'a' || c == 'c' || c == 't' || c == 'g'
+		   || c == 'A' || c == 'C' || c == 'T' || c == 'G')) {
+		return (c >> 1) & 3;
+	} else {
+		std::cerr << "Invalid char in DNA" << c;
+		exit(1);
 	}
-	cout<<"Unknow nucleotide: "<<c<<"!"<<endl;
-	exit(0);
-	return 0;
+}
+
+static inline string kmer2str(kmer num, uint k){
+	string res(k, 0);
+	Pow2<kmer> anc(2*(k-1));
+	for(uint i = 0 ; i < k; i++) {
+		uint nuc = num / anc;
+		num %= anc;
+		anc >>= 2;
+
+		assume(nuc <= 3, "nuc=%u > 3", nuc);
+		res[i] = "ACTG"[nuc];
+	}
+	return res;
+}
+
+static inline void print_kmer(kmer num,uint n){
+	cout<<kmer2str(num, n);
 }
 
 
-
 static inline kmer nuc2intrc(char c){
-	switch(c){
-		/*
-		case 'a': return 0;
-		case 'c': return 1;
-		case 'g': return 2;
-		case 't': return 3;
-		*/
-		case 'A': return 3;
-		case 'C': return 2;
-		case 'G': return 1;
-		case 'T': return 0;
-		case 'N': return 0;
-	}
-	cout<<"Unknow nucleotide: "<<c<<"!"<<endl;
-	exit(0);
-	return 0;
+	return nuc2int(c) ^ 0b10;
 }
 
 
@@ -124,17 +117,9 @@ inline string getCanonical(const string& str){
 
 inline kmer str2num(const string& str){
 	kmer res(0);
-	for(uint i(0);i<str.size();i++){
-		res<<=2;
-		switch (str[i]){
-			case 'A':res+=0;break;
-			case 'C':res+=1;break;
-			case 'G':res+=2;break;
-			case 'T':res+=3;break;
-			case 'N':res+=0;break;
-			default:cout<<"bug"<<"!"<<endl;
-	exit(0);
-		}
+	for(uint i=0;i<str.size();i++){
+		res <<= 2;
+		res |= nuc2int(str[i]);
 	}
 	return res;
 }
@@ -220,9 +205,6 @@ inline __uint128_t rcb(const __uint128_t& in, uint n){
 	kmer_u res = { .k = in };
 	static_assert(sizeof(res) == sizeof(__uint128_t), "kmer sizeof mismatch");
 
-	// Complement
-	res.m128i = ~res.m128i;
-
 	// Swap byte order
 	kmer_u shuffidxs = { .u8 = {15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0} };
 	res.m128i = _mm_shuffle_epi8 (res.m128i, shuffidxs.m128i);
@@ -233,6 +215,7 @@ inline __uint128_t rcb(const __uint128_t& in, uint n){
 	for(uint64_t& x : res.u64) {
 		x = ((x & c1) << 4) | ((x & (c1 << 4)) >> 4); // swap 2-nuc order in bytes
 		x = ((x & c2) << 2) | ((x & (c2 << 2)) >> 2); // swap nuc order in 2-nuc
+		x ^= 0xaaaaaaaaaaaaaaaa; // Complement;
 	}
 
 	// Realign to the right
@@ -245,7 +228,7 @@ inline __uint128_t rcb(const __uint128_t& in, uint n){
 inline uint64_t rcb(uint64_t in, uint n) {
 	assume(n <= 32, "n=%u > 32", n);
 	// Complement, swap byte order
-	uint64_t res = __builtin_bswap64(~in);
+	uint64_t res = __builtin_bswap64(in ^ 0xaaaaaaaaaaaaaaaa);
 	// Swap nuc order in bytes
 	const uint64_t c1 = 0x0f0f0f0f0f0f0f0f;
 	const uint64_t c2 = 0x3333333333333333;
@@ -254,7 +237,6 @@ inline uint64_t rcb(uint64_t in, uint n) {
 
 	// Realign to the right
 	res >>= 64 - 2*n;
-
 	return res;
 }
 
@@ -263,7 +245,7 @@ inline uint64_t rcb(uint64_t in, uint n) {
 inline uint32_t rcb(uint32_t in, uint n) {
 	assume(n <= 16, "n=%u > 16", n);
 	// Complement, swap byte order
-	uint32_t res = __builtin_bswap32(~in);
+	uint32_t res = __builtin_bswap32(in ^ 0xaaaaaaaa);
 
 	// Swap nuc order in bytes
 	const uint32_t c1 = 0x0f0f0f0f;
@@ -273,7 +255,6 @@ inline uint32_t rcb(uint32_t in, uint n) {
 
 	// Realign to the right
 	res >>= 32 - 2*n;
-
 	return res;
 }
 
@@ -335,7 +316,7 @@ static inline size_t hash2(int i1)
 
 static inline kmer get_int_in_kmer(kmer seq,uint64_t pos,uint number_nuc){
 	seq>>=2*pos;
-	return  ((seq)%(1<<(2*number_nuc)));
+	return (seq)%(1<<(2*number_nuc));
 }
 
 
@@ -363,8 +344,8 @@ extended_minimizer kmer_Set_Light::get_extended_minimizer_from_min(kmer seq, uin
 
 
 void kmer_Set_Light::print_extended(extended_minimizer min){
-	print_kmer(min.mini);
-	print_kmer(min.extended_mini);
+	print_kmer(min.mini, 32);
+	print_kmer(min.extended_mini, 32);
 }
 
 
@@ -734,7 +715,7 @@ void kmer_Set_Light::create_super_buckets_regular(const string& input_file){
 	for(uint i(0);i<number_superbuckets;++i)
 		writers[i] = std::unique_ptr<SuperBucketWritter>(new SuperBucketWritter(i));
 
-	#pragma omp parallel num_threads(coreNumber)
+	//#pragma omp parallel num_threads(coreNumber)
 	{
 		string refs[BATCH_SIZE];
 		for(auto& str : refs) str.reserve(1024);
@@ -840,32 +821,17 @@ void kmer_Set_Light::create_super_buckets_regular(const string& input_file){
 
 
 void kmer_Set_Light::str2bool(const string& str,uint mini){
+	uint64_t pos0 = all_buckets[mini].current_pos;
+	auto& valid_kmer_bucket = Valid_kmer[mini%bucket_per_superBuckets];
 	for(uint i(0);i<str.size();++i){
-		Valid_kmer[mini%bucket_per_superBuckets].push_back(true);
-		switch (str[i]){
-			case 'A':
-				bucketSeq[(all_buckets[mini].current_pos+i)*2]=(false);
-				bucketSeq[(all_buckets[mini].current_pos+i)*2+1]=(false);
-				break;
-			case 'C':
-				bucketSeq[(all_buckets[mini].current_pos+i)*2]=(false);
-				bucketSeq[(all_buckets[mini].current_pos+i)*2+1]=(true);
-				break;
-			case 'G':
-				bucketSeq[(all_buckets[mini].current_pos+i)*2]=(true);
-				bucketSeq[(all_buckets[mini].current_pos+i)*2+1]=(false);
-				break;
-			case 'T':
-				bucketSeq[(all_buckets[mini].current_pos+i)*2]=(true);
-				bucketSeq[(all_buckets[mini].current_pos+i)*2+1]=(true);
-				break;
-			default:
-				cout<<"nope"<<endl;
-			}
+		valid_kmer_bucket.push_back(true);
+		uint nuc = nuc2int(str[i]);
+		bucketSeq[(pos0+i)*2] = nuc & 0b10;
+		bucketSeq[(pos0+i)*2+1] = nuc & 0b01;
 	}
-	all_buckets[mini].current_pos+=(str.size());
+	all_buckets[mini].current_pos+=str.size();
 	for(uint i(0);i<k-1;++i){
-		Valid_kmer[mini%bucket_per_superBuckets][Valid_kmer[mini%bucket_per_superBuckets].size()-k+i+1]=(false);
+		valid_kmer_bucket[valid_kmer_bucket.size()-k+i+1]=false;
 	}
 }
 
@@ -967,60 +933,10 @@ inline kmer kmer_Set_Light::update_kmer_local(uint64_t pos,const vector<bool>& V
 
 
 
-void kmer_Set_Light::print_kmer(kmer num,uint n){
-	Pow2<kmer> anc(2*(k-1));
-	for(uint i(0);i<k and i<n;++i){
-		uint nuc=num/anc;
-		num=num%anc;
-		if(nuc==3){
-			cout<<"T";
-		}
-		if(nuc==2){
-			cout<<"G";
-		}
-		if(nuc==1){
-			cout<<"C";
-		}
-		if(nuc==0){
-			cout<<"A";
-		}
-		if (nuc>=4){
-			cout<<nuc<<endl;
-			cout<<"WTF"<<endl;
-		}
-		anc>>=2;
-	}
-	cout<<endl;
-}
 
 
 
-inline string kmer_Set_Light::kmer2str(kmer num){
-	string res;
-	Pow2<kmer> anc(2*(k-1));
-	for(uint i(0);i<k;++i){
-		uint nuc=num/anc;
-		num=num%anc;
-		if(nuc==3){
-			res+="T";
-		}
-		if(nuc==2){
-			res+="G";
-		}
-		if(nuc==1){
-			res+="C";
-		}
-		if(nuc==0){
-			res+="A";
-		}
-		if (nuc>=4){
-			cout<<nuc<<endl;
-			cout<<"WTF"<<endl;
-		}
-		anc>>=2;
-	}
-	return res;
-}
+
 
 
 

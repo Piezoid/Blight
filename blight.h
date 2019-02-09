@@ -195,7 +195,6 @@ public:
 	void str2bool(const string& str,uint mini);
 	kmer update_kmer(uint64_t pos,uint32_t mini,kmer input);
 	kmer get_kmer(uint64_t pos,uint64_t mini);
-	void print_kmer(kmer num,uint n=100);
 	int32_t query_get_pos_unitig(const kmer canon,uint minimizer);
 	uint32_t get_anchors(const string& query,uint& minimizer, vector<kmer>& kmerV,uint pos);
 	uint multiple_query_serial(const uint minimizerV, const vector<kmer>& kmerV);
@@ -213,7 +212,6 @@ public:
 	int64_t multiple_minimizer_query_hash(const uint minimizer,  kmer kastor,uint prefix_length,uint suffix_length);
 	bool query_kmer_bool(kmer canon);
 	pair<uint32_t,uint32_t> query_sequence_bool(const string& query);
-	string kmer2str(kmer num);
 	extended_minimizer minimizer_and_more(kmer seq);
 	extended_minimizer get_extended_minimizer_from_min(kmer seq, uint32_t mini, uint position_minimizer);
 	void print_extended(extended_minimizer);
