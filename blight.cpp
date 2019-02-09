@@ -460,15 +460,15 @@ uint32_t kmer_Set_Light::minimizer_extended(kmer seq){
 
 
 void kmer_Set_Light::abundance_minimizer_construct(const string& input_file){
-	auto inUnitigs=new zstr::ifstream(input_file);
-	if( not inUnitigs->good()){
+	zstr::ifstream inUnitigs(input_file);
+	if( not inUnitigs.good()){
 		cout<<"Problem with files opening"<<endl;
 		exit(1);
 	}
 	string ref,useless;
-	while(not inUnitigs->eof()){
-		getline(*inUnitigs,useless);
-		getline(*inUnitigs,ref);
+	while(not inUnitigs.eof()){
+		getline(inUnitigs,useless);
+		getline(inUnitigs,ref);
 		//FOREACH UNITIG
 		if(not ref.empty() and not useless.empty()){
 			//FOREACH KMER
@@ -487,7 +487,6 @@ void kmer_Set_Light::abundance_minimizer_construct(const string& input_file){
 		abundance_minimizer[i]=(uint8_t)(log2(abundance_minimizer_temp[i])*8);
 	}
 	delete[] abundance_minimizer_temp;
-	delete inUnitigs;
 }
 
 
@@ -496,37 +495,111 @@ static inline int64_t round_eight(int64_t n){
 	return n+8;
 }
 
+#define BATCH_SIZE 1024
+
+
+class SuperBucketWritter {
+public:
+	SuperBucketWritter(size_t id) : _stream("_out"+to_string(id), ios_base::binary | ios_base::out) {
+		omp_init_lock(&lock);
+	}
+
+	~SuperBucketWritter() {
+		omp_destroy_lock(&lock);
+		_stream << std::flush;
+	}
+
+	class Buffer {
+	public:
+		bool push(minimizer_type mini, const string& seq, size_t start, size_t len) {
+			assume(_count < BATCH_SIZE, "count=%llu > BATCH_SIZE", _count);
+			assume(len + start <= seq.length(), "len=%llu + start=%llu > seq.length()=%llu", len, start, seq.length());
+			_superks[_count++] = { seq.data()+start, minimizer_type(len), mini };
+			return _count >= BATCH_SIZE;
+		}
+
+	protected:
+		friend class SuperBucketWritter;
+
+		struct SuperK {
+			const char* str;
+			minimizer_type length; // should be size_t or something, this is for packing
+			minimizer_type mini;
+		};
+
+		SuperK _superks[BATCH_SIZE];
+		size_t _count = 0;
+	};
+
+	void flush(Buffer& buf) {
+		omp_set_lock(&lock);
+		for(size_t i = 0 ; i < buf._count ; i++) {
+			const Buffer::SuperK& superk = buf._superks[i];
+			_stream.put('>');
+			auto mini_str = to_string(superk.mini);
+			_stream.write(mini_str.data(), mini_str.length());
+			_stream.put('\n');
+
+			_stream.write(superk.str, superk.length);
+			_stream.put('\n');
+		}
+		omp_unset_lock(&lock);
+		buf._count = 0;
+	}
+
+private:
+	omp_lock_t lock;
+	zstr::ofstream _stream;
+};
+
 
 
 void kmer_Set_Light::create_super_buckets_extended(const string& input_file){
 	uint64_t total_nuc_number(0);
-	auto inUnitigs=new zstr::ifstream(input_file);
-	if( not inUnitigs->good()){
+	zstr::ifstream inUnitigs(input_file, ios_base::binary | ios_base::in);
+	if( not inUnitigs.good()){
 		cout<<"Problem with files opening"<<endl;
 		exit(1);
 	}
-	vector<ostream*> out_files;
-	for(uint i(0);i<number_superbuckets;++i){
-		//~ auto out =new ofstream("_out"+to_string(i));
-		auto out =new zstr::ofstream("_out"+to_string(i));
-		out_files.push_back(out);
-	}
-	omp_lock_t lock[number_superbuckets.value()];
-	for (uint i=0; i<number_superbuckets; i++){
-		omp_init_lock(&(lock[i]));
-	}
+
+	auto writers = std::unique_ptr<std::unique_ptr<SuperBucketWritter>[]>(new std::unique_ptr<SuperBucketWritter>[number_superbuckets.value()]);
+	//writers.reserve(number_superbuckets.value());
+	for(uint i(0);i<number_superbuckets;++i)
+		writers[i] = std::unique_ptr<SuperBucketWritter>(new SuperBucketWritter(i));
+
+
 	#pragma omp parallel num_threads(coreNumber)
 	{
-		string ref,useless;
+		string refs[BATCH_SIZE];
+		for(auto& str : refs) str.reserve(1024);
+
+		auto buffers = std::unique_ptr<SuperBucketWritter::Buffer[]>(new SuperBucketWritter::Buffer[number_superbuckets.value()]());
+
 		minimizer_type old_minimizer,minimizer,precise_minimizer,old_precise_minimizer;
-		while(not inUnitigs->eof()){
+		while(not inUnitigs.eof()){
+			unsigned nseq = 0;
 			#pragma omp critical(dataupdate)
 			{
-				getline(*inUnitigs,useless);
-				getline(*inUnitigs,ref);
+				for(nseq = 0; nseq < BATCH_SIZE && not inUnitigs.eof();) {
+					string& ref = refs[nseq];
+					getline(inUnitigs,ref); // Skip this one
+					if(ref.empty()) {
+						getline(inUnitigs,ref);
+						continue;
+					}
+					getline(inUnitigs,ref);
+					if(ref.empty()) {
+						continue;
+					}
+					nseq++;
+				}
 			}
-			//FOREACH UNITIG
-			if(not ref.empty() and not useless.empty()){
+
+			if(nseq == 0) break;
+
+			for(unsigned seq_idx=0 ; seq_idx < nseq ; seq_idx++) {
+				const string& ref = refs[seq_idx];
+
 				old_minimizer=minimizer=minimizer_number_graph.value();
 				uint last_position(0);
 				//FOREACH KMER
@@ -548,13 +621,14 @@ void kmer_Set_Light::create_super_buckets_extended(const string& input_file){
 					minimizer=nadine.mini;
 					precise_minimizer=nadine.extended_mini;
 					if(old_minimizer!=minimizer or ( new_fragile==fragile and old_precise_minimizer!=precise_minimizer)){
-						omp_set_lock(&(lock[((old_precise_minimizer))/bucket_per_superBuckets]));
-						*(out_files[((old_precise_minimizer))/bucket_per_superBuckets])<<">"+to_string(old_precise_minimizer)+"\n"<<ref.substr(last_position,i-last_position+k)<<"\n";
-						omp_unset_lock(&(lock[((old_precise_minimizer))/bucket_per_superBuckets]));
+						size_t sbucket_id = old_precise_minimizer/bucket_per_superBuckets;
+						if(buffers[sbucket_id].push(old_precise_minimizer, ref, last_position,i-last_position+k))
+							writers[sbucket_id]->flush(buffers[sbucket_id]);
+
 						#pragma omp atomic
 						all_buckets[old_precise_minimizer].nuc_minimizer+=(i-last_position+k);
 						#pragma omp atomic
-						all_mphf[old_precise_minimizer/number_bucket_per_mphf].mphf_size+=(i-last_position+k)-k+1;
+						all_mphf[sbucket_id].mphf_size+=(i-last_position+k)-k+1;
 						#pragma omp atomic
 						total_nuc_number+=(i-last_position+k);
 						last_position=i+1;
@@ -569,9 +643,9 @@ void kmer_Set_Light::create_super_buckets_extended(const string& input_file){
 					}
 				}
 				if(ref.size()-last_position>k-1){
-					omp_set_lock(&(lock[((old_precise_minimizer))/bucket_per_superBuckets]));
-					*(out_files[((old_precise_minimizer))/bucket_per_superBuckets])<<">"+to_string(old_precise_minimizer)+"\n"<<ref.substr(last_position)<<"\n";
-					omp_unset_lock(&(lock[((old_precise_minimizer))/bucket_per_superBuckets]));
+					size_t sbucket_id = old_precise_minimizer/bucket_per_superBuckets;
+					if(buffers[sbucket_id].push(old_precise_minimizer, ref, last_position, ref.length()-last_position))
+						writers[sbucket_id]->flush(buffers[sbucket_id]);
 					#pragma omp atomic
 					all_buckets[old_precise_minimizer].nuc_minimizer+=(ref.substr(last_position)).size();
 					#pragma omp atomic
@@ -580,13 +654,13 @@ void kmer_Set_Light::create_super_buckets_extended(const string& input_file){
 					all_mphf[old_precise_minimizer/number_bucket_per_mphf].mphf_size+=(ref.substr(last_position)).size()-k+1;
 				}
 			}
+
+			// We need to flush all the buffers as the unitig strings will be invalidated with the next batch
+			for(size_t sbucket_id=0 ; sbucket_id < number_superbuckets ; sbucket_id++)
+				writers[sbucket_id]->flush(buffers[sbucket_id]);
 		}
 	}
-	delete inUnitigs;
-	for(uint i(0);i<number_superbuckets;++i){
-		*out_files[i]<<flush;
-		delete(out_files[i]);
-	}
+
 	bucketSeq.resize(total_nuc_number*2);
 	bucketSeq.shrink_to_fit();
 	uint64_t i(0),total_pos_size(0);
@@ -650,32 +724,46 @@ void kmer_Set_Light::construct_index(const string& input_file){
 
 void kmer_Set_Light::create_super_buckets_regular(const string& input_file){
 	uint64_t total_nuc_number(0);
-	auto inUnitigs=new zstr::ifstream(input_file);
-	if( not inUnitigs->good()){
+	zstr::ifstream inUnitigs(input_file);
+	if( not inUnitigs.good()){
 		cout<<"Problem with files opening"<<endl;
 		exit(1);
 	}
-	vector<ostream*> out_files;
-	for(uint i(0);i<number_superbuckets;++i){
-		auto out =new zstr::ofstream("_out"+to_string(i));
-		out_files.push_back(out);
-	}
-	omp_lock_t lock[number_superbuckets.value()];
-	for (uint i=0; i<number_superbuckets; i++){
-		omp_init_lock(&(lock[i]));
-	}
+
+	auto writers = std::unique_ptr<std::unique_ptr<SuperBucketWritter>[]>(new std::unique_ptr<SuperBucketWritter>[number_superbuckets.value()]);
+	for(uint i(0);i<number_superbuckets;++i)
+		writers[i] = std::unique_ptr<SuperBucketWritter>(new SuperBucketWritter(i));
+
 	#pragma omp parallel num_threads(coreNumber)
 	{
-		string ref,useless;
-		minimizer_type old_minimizer,minimizer;
-		while(not inUnitigs->eof()){
+		string refs[BATCH_SIZE];
+		for(auto& str : refs) str.reserve(1024);
+
+		auto buffers = std::unique_ptr<SuperBucketWritter::Buffer[]>(new SuperBucketWritter::Buffer[number_superbuckets.value()]());
+
+		while(not inUnitigs.eof()){
+			unsigned nseq = 0;
 			#pragma omp critical(dataupdate)
 			{
-				getline(*inUnitigs,useless);
-				getline(*inUnitigs,ref);
+				for(nseq = 0; nseq < BATCH_SIZE && not inUnitigs.eof();) {
+					string& ref = refs[nseq];
+					getline(inUnitigs,ref); // Skip this one
+					if(ref.empty()) {
+						getline(inUnitigs,ref);
+						continue;
+					}
+					getline(inUnitigs,ref);
+					if(ref.empty()) {
+						continue;
+					}
+					nseq++;
+				}
 			}
-			//FOREACH UNITIG
-			if(not ref.empty() and not useless.empty()){
+
+			if(nseq == 0) break;
+			minimizer_type old_minimizer,minimizer;
+			for(unsigned seq_idx=0 ; seq_idx < nseq ; seq_idx++) {
+				const string& ref = refs[seq_idx];
 				old_minimizer=minimizer=minimizer_number_graph.value();
 				uint last_position(0);
 				//FOREACH KMER
@@ -688,9 +776,10 @@ void kmer_Set_Light::create_super_buckets_regular(const string& input_file){
 					//COMPUTE KMER MINIMIZER
 					minimizer=regular_minimizer(seq);
 					if(old_minimizer!=minimizer){
-						omp_set_lock(&(lock[((old_minimizer))/bucket_per_superBuckets]));
-						*(out_files[((old_minimizer))/bucket_per_superBuckets])<<">"+to_string(old_minimizer)+"\n"<<ref.substr(last_position,i-last_position+k)<<"\n";
-						omp_unset_lock(&(lock[((old_minimizer))/bucket_per_superBuckets]));
+						size_t sbucket_id = old_minimizer/bucket_per_superBuckets;
+						if(buffers[sbucket_id].push(old_minimizer, ref, last_position,i-last_position+k))
+							writers[sbucket_id]->flush(buffers[sbucket_id]);
+
 						#pragma omp atomic
 						all_buckets[old_minimizer].nuc_minimizer+=(i-last_position+k);
 						#pragma omp atomic
@@ -703,9 +792,9 @@ void kmer_Set_Light::create_super_buckets_regular(const string& input_file){
 					}
 				}
 				if(ref.size()-last_position>k-1){
-					omp_set_lock(&(lock[((old_minimizer))/bucket_per_superBuckets]));
-					*(out_files[((old_minimizer))/bucket_per_superBuckets])<<">"+to_string(old_minimizer)+"\n"<<ref.substr(last_position)<<"\n";
-					omp_unset_lock(&(lock[((old_minimizer))/bucket_per_superBuckets]));
+					size_t sbucket_id = old_minimizer/bucket_per_superBuckets;
+					if(buffers[sbucket_id].push(old_minimizer, ref, last_position, ref.length()-last_position))
+						writers[sbucket_id]->flush(buffers[sbucket_id]);
 					#pragma omp atomic
 					all_buckets[old_minimizer].nuc_minimizer+=(ref.substr(last_position)).size();
 					#pragma omp atomic
@@ -715,13 +804,13 @@ void kmer_Set_Light::create_super_buckets_regular(const string& input_file){
 					all_mphf[old_minimizer/number_bucket_per_mphf].empty=false;
 				}
 			}
+
+			// We need to flush all the buffers as the unitig strings will be invalidated with the next batch
+			for(size_t sbucket_id=0 ; sbucket_id < number_superbuckets ; sbucket_id++)
+				writers[sbucket_id]->flush(buffers[sbucket_id]);
 		}
 	}
-	delete inUnitigs;
-	for(uint i(0);i<number_superbuckets;++i){
-		*out_files[i]<<flush;
-		delete(out_files[i]);
-	}
+
 	bucketSeq.resize(total_nuc_number*2);
 	bucketSeq.shrink_to_fit();
 	uint64_t i(0),total_pos_size(0);
@@ -1240,7 +1329,7 @@ uint kmer_Set_Light::multiple_query_optimized(uint32_t minimizer, const vector<k
 
 
 
-int32_t kmer_Set_Light::query_get_pos_unitig(const kmer canon,uint minimizer){
+inline int32_t kmer_Set_Light::query_get_pos_unitig(const kmer canon,uint minimizer){
 	#pragma omp atomic
 	number_query++;
 	if(unlikely(all_mphf[minimizer/number_bucket_per_mphf].empty))
@@ -1303,20 +1392,40 @@ void kmer_Set_Light::file_query(const string& query_file){
 	uint64_t TP(0),FP(0);
 	#pragma omp parallel num_threads(coreNumber)
 	{
+		string queries[BATCH_SIZE];
+		for(auto& str : queries) str.reserve(1024);
 		vector<kmer> kmerV;
-		while(not in->eof() and in->good()){
-			string query;
+		while(not in->eof()){
+			unsigned nseq = 0;
 			#pragma omp critical(dataupdate)
 			{
-				getline(*in,query);
-				getline(*in,query);
+				for(nseq = 0; nseq < BATCH_SIZE && not in->eof();) {
+					string& query = queries[nseq];
+					getline(*in,query); // Skip this one
+					if(query.empty()) {
+						getline(*in,query);
+						continue;
+					}
+					getline(*in,query);
+					if(query.empty()) {
+						continue;
+					}
+					nseq++;
+				}
 			}
-			if(query.size()>=k){
-				pair<uint,uint> pair(query_sequence_bool(query));
-				#pragma atomic
-				TP+=pair.first;
-				#pragma atomic
-				FP+=pair.second;
+
+			if(nseq == 0) break;
+
+
+			for(unsigned seq_idx=0 ; seq_idx < nseq ; seq_idx++) {
+				string& query = queries[seq_idx];
+				if(query.size()>=k){
+					pair<uint,uint> pair(query_sequence_bool(query));
+					#pragma atomic
+					TP+=pair.first;
+					#pragma atomic
+					FP+=pair.second;
+				}
 			}
 		}
 	}
