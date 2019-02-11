@@ -102,7 +102,8 @@ private:
 	uint_fast8_t _bits;
 };
 
-class kmer_Set_Light{
+
+class alignas(64) kmer_Set_Light {
 public:
 	const uint k, m1, m2, m3, extension_minimizer, minimizer_size_graph;
 	const uint coreNumber;
@@ -142,7 +143,7 @@ public:
 	kmer_Set_Light(uint k_val,uint m1_val, uint m2_val, uint m3_val, uint coreNumber_val, uint bit_to_save,uint ex)
 		: k(k_val)
 		, m1(m1_val)
-		, m2(m2_val ? m2_val : m1)
+		, m2(m2_val)
 		, m3(m3_val)
 		, extension_minimizer(ex)
 		, minimizer_size_graph(m1-2*extension_minimizer)

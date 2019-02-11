@@ -31,7 +31,7 @@ static inline kmer nuc2int(char c){
 		return (c >> 1) & 3;
 	} else {
 		std::cerr << "Invalid char in DNA" << c;
-		exit(1);
+		abort();
 	}
 }
 
@@ -319,7 +319,199 @@ static inline kmer get_int_in_kmer(kmer seq,uint64_t pos,uint number_nuc){
 	return (seq)%(1<<(2*number_nuc));
 }
 
+template<typename elem_t, size_t log2size=6, typename idx_t=uint_fast8_t>
+struct KissRing {
+	static constexpr size_t capacity = 1ull << log2size;
+	static_assert(capacity <= std::numeric_limits<idx_t>::max(), "idx_t too short");
+	void push_front(elem_t val)  {
+		assume(!full(), "Ring full");
+		_arr[mask & --_b] = val;
+	}
+	void push_back(elem_t val)  {
+		assume(!full(), "Ring full");
+		_arr[mask & _e++] = val;
+	}
+	elem_t front() {
+		assume(!empty(), "Ring empty");
+		return _arr[mask & _b];
+	}
+	elem_t back() {
+		assume(!empty(), "Ring empty");
+		return _arr[mask & (_e-1)];
+	}
+	elem_t pop_front() {
+		assume(!empty(), "Ring empty");
+		return std::move(_arr[mask & _b++]);
+	}
+	elem_t pop_back() {
+		assume(!empty(), "Ring empty");
+		return std::move(_arr[mask & --_e]);
+	}
+	void clear() { _e = _b; }
+	bool empty() const { return _b == _e; }
+	bool full()  const { return size() == capacity; }
+	idx_t size() const {
+		assume(_e - _b < capacity, "Unwrapped indices");
+		return _e - _b;
+	}
 
+private:
+	static constexpr size_t mask = capacity - 1;
+	elem_t _arr[capacity];
+	uint32_t _b = 0;
+	uint32_t _e = 0;
+};
+
+inline bool is_canonical(unsigned x) { return __builtin_popcount(x) & 1; }
+inline bool is_canonical(unsigned long long x) { return __builtin_popcountll(x) & 1; }
+
+using ksize_t = uint_fast8_t;
+template<typename kmer_t>
+inline  kmer_t canonize_fast(kmer_t x, ksize_t k) {
+	if(is_canonical(x))
+		return x;
+	else
+		return rcb(x, k);
+}
+
+template<typename mini_t=minimizer_type>
+struct SuperKChopper {
+	SuperKChopper(ksize_t k, ksize_t m) : _ring(), _w(k - m + 1), _m(m) {
+		assume(m & 1, "minimizer size must be odd");
+		assume(k >= m, "k < m");
+	}
+
+	void reset(const string& seq) {
+		_ring.clear();
+		_seq = &seq;
+		first_window();
+	}
+
+	// Window size in nucleotides, including the minimizer
+	ksize_t window_size() const { return _w +_m - 1; }
+	//bool ended() { return _mini_pos + _m  > _seq->length(); }
+	bool ended() { return _seq->begin() + _mini_pos + _m  > _seq->end(); }
+
+	struct SuperKmer {
+		const char* str;
+		unsigned length;
+		mini_t minimizer;
+		bool last;
+	};
+
+	SuperKmer next() {
+		bool changed = false;
+		mini_t prev_mini = _ring.front().canon;
+		unsigned prev_mini_pos = _mini_pos;
+		for(; not ended() && not changed; _mini_pos++) {
+			changed = update_mini(prev_mini);
+			if(not changed) { // No new minimum entering the right side
+				// Check for the current minimum going out on the left
+				if(_ring.front().pos <= _mini_pos - _w) {
+					_ring.pop_front();
+					changed = prev_mini != _ring.front().canon;
+				}
+				assume(_ring.front().pos > _mini_pos - _w, "WTF");
+			}
+			cout << "N " << kmer2str(_ring.front().canon << 1, _m) << endl;
+
+			if(changed) {
+				assert(_window_pos == prev_mini_pos - _w);
+				SuperKmer superk = { //_seq->data() + _window_pos,
+									 _seq->data() + prev_mini_pos - _w,
+									 //_mini_pos + _m - 1 - _window_pos,
+									 _mini_pos - prev_mini_pos + window_size(),
+									 prev_mini,
+									 false };
+				_mini_pos++;
+
+				_window_pos = _mini_pos - _w;
+				return superk;
+			}
+		}
+		assert(unsigned(_seq->length()) - _window_pos == _mini_pos - prev_mini_pos + window_size());
+		SuperKmer superk = { _seq->data() + _window_pos,
+							 //_mini_pos + _m - 2 - _window_pos + ended(),
+							 unsigned(_seq->length()) - _window_pos,
+							 prev_mini,
+							true };
+		return superk;
+	}
+
+
+private:
+	struct ring_rec {
+		unsigned pos;
+		mini_t canon;
+		mini_t hash;
+	};
+
+
+	void first_window() {
+		_window_pos = 0;
+		assume(_seq->size() >= window_size(), "seq.length()=%llu < w=%llu", _seq->length(), size_t(window_size()));
+
+		cout << *_seq << endl;
+
+		_mini = str2num(_seq->substr(0, _m));
+		_minirc = rcb(_mini, _m);
+		cout << "0 " << kmer2str(_mini, _m) << endl;
+		ring_rec rec = { 0, (is_canonical(_mini) ? _mini : _minirc) >> 1 };
+		rec.hash = revhash(rec.canon);
+		_ring.push_back(rec);
+
+		// Fill the first window
+		for(_mini_pos = 1; _mini_pos < _w; _mini_pos++) {
+			update_mini();
+		}
+		cout << "N " << kmer2str(_ring.front().canon << 1, _m) << endl;
+	}
+
+	bool update_mini(minimizer_type prev_mini=0) {
+		assume(_mini_pos + _m - 1 < _seq->length(), "");
+		mini_t nuc =  nuc2int((*_seq)[_mini_pos + _m - 1]);
+		_mini = ((_mini << 2) % Pow2<mini_t>(2*_m)) | nuc;
+		_minirc = (_minirc >> 2) | ((0b10 ^ nuc) * Pow2<mini_t>(2*(_m-1)));
+		assert(_minirc == rcb(_mini, _m));
+
+
+		cout << _mini_pos << " " << kmer2str(_mini, _m) << endl;
+		ring_rec rec { _mini_pos, (is_canonical(_mini) ? _mini : _minirc) >> 1 };
+		rec.hash = revhash(rec.canon);
+
+		bool changed = false;
+		if(_ring.back().hash >= rec.hash) {
+			do _ring.pop_back(); while(not _ring.empty() && _ring.back().hash >= rec.hash);
+			changed = _ring.empty() && rec.canon != prev_mini;
+		}
+
+		_ring.push_back(rec);
+
+		return changed;
+	}
+
+
+	const string* _seq;
+	KissRing<ring_rec> _ring;
+	unsigned _mini_pos;
+	unsigned _window_pos;
+	mini_t _mini;
+	mini_t _minirc;
+	ksize_t _w, _m;
+};
+
+
+template<typename mini_t=minimizer_type>
+void mini_test(const string& seq, ksize_t w, ksize_t m) {
+	assume(m <= w, "m=%llu > w=%llu", size_t(m), size_t(w));
+	assume(seq.size() >= w, "seq.length()=%llu < w=%llu", seq.length(), size_t(w));
+
+
+//	SuperKChopper<> superk(seq, w, m);
+//	for(; not superk.next() ;);
+}
+
+template void mini_test<minimizer_type>(const string& seq, ksize_t w, ksize_t m);
 
 extended_minimizer kmer_Set_Light::get_extended_minimizer_from_min(kmer seq, uint32_t mini, uint position_minimizer){
 	extended_minimizer res;
@@ -396,12 +588,15 @@ extended_minimizer kmer_Set_Light::minimizer_and_more(kmer seq){
 uint32_t kmer_Set_Light::regular_minimizer(kmer seq){
 	uint32_t mini,mmer;
 	mmer=seq%minimizer_number_graph;
-	mini=min(mmer,rcb(mmer,minimizer_size_graph));
+	mmer=is_canonical(mmer) ? mmer : rcb(mmer,minimizer_size_graph);
+	mmer >>= 1;
+	mini=mmer;
 	uint64_t hash_mini = xs(mini);
 	for(uint i(1);i<=k-minimizer_size_graph;i++){
 		seq>>=2;
 		mmer=seq%minimizer_number_graph;
-		mmer=min(mmer,rcb(mmer,minimizer_size_graph));
+		mmer=is_canonical(mmer) ? mmer : rcb(mmer,minimizer_size_graph);
+		mmer >>= 1;
 		uint64_t hash = xs(mmer);
 		if(hash_mini>hash){
 			mini=mmer;
@@ -476,7 +671,7 @@ static inline int64_t round_eight(int64_t n){
 	return n+8;
 }
 
-#define BATCH_SIZE 1024
+#define BATCH_SIZE 512
 
 
 class SuperBucketWritter {
@@ -701,7 +896,21 @@ void kmer_Set_Light::construct_index(const string& input_file){
 	cout << "The whole indexing took me " << time_spant.count() << " seconds."<< endl;
 }
 
+void check_superkemr(const string& seq, kmer_Set_Light& ksl, const SuperKChopper<>::SuperKmer& superk) {
+	const char* start = seq.data();
+	auto minik0 = ksl.regular_minimizer(str2num(string(superk.str, ksl.k)));
 
+	for(unsigned i = 1; i < superk.length - ksl.k ; ++i)
+		assert(minik0 == ksl.regular_minimizer(str2num(string(superk.str, ksl.k))));
+
+	if(superk.str > seq.data())
+		assert(minik0 != ksl.regular_minimizer(str2num(string(superk.str-1, ksl.k))));
+
+	if(superk.str+superk.length+1 - seq.data() < seq.length())
+		assert(minik0 != ksl.regular_minimizer(str2num(string(superk.str+superk.length-ksl.k+1, ksl.k))));
+
+
+}
 
 void kmer_Set_Light::create_super_buckets_regular(const string& input_file){
 	uint64_t total_nuc_number(0);
@@ -743,20 +952,36 @@ void kmer_Set_Light::create_super_buckets_regular(const string& input_file){
 
 			if(nseq == 0) break;
 			minimizer_type old_minimizer,minimizer;
+			SuperKChopper<> chopper(k, minimizer_size_graph);
 			for(unsigned seq_idx=0 ; seq_idx < nseq ; seq_idx++) {
 				const string& ref = refs[seq_idx];
+				chopper.reset(ref);
+
+
 				old_minimizer=minimizer=minimizer_number_graph.value();
 				uint last_position(0);
 				//FOREACH KMER
 				kmer seq(str2num(ref.substr(0,k)));
 				minimizer=regular_minimizer(seq);
+				cout << "O " << kmer2str(minimizer << 1, minimizer_size_graph) << endl;
 				old_minimizer=minimizer;
 				uint i(0);
+				SuperKChopper<>::SuperKmer superk;
+				superk.last = false;
 				for(;i+k<ref.size();++i){
 					updateK(seq,ref[i+k]);
 					//COMPUTE KMER MINIMIZER
 					minimizer=regular_minimizer(seq);
+
+					cout << "O " << kmer2str(minimizer << 1, minimizer_size_graph) << endl;
 					if(old_minimizer!=minimizer){
+						superk = chopper.next();
+						check_superkemr(ref, *this, superk);
+						cout << "O " << string(ref.data()+last_position,i-last_position+k) << endl;
+						cout << "N " << string(superk.str, superk.length) << endl;
+						assume(superk.minimizer == old_minimizer, "");
+						assume(ref.data()+last_position == superk.str, "");
+						assume(superk.length == i-last_position+k, "");
 						size_t sbucket_id = old_minimizer/bucket_per_superBuckets;
 						if(buffers[sbucket_id].push(old_minimizer, ref, last_position,i-last_position+k))
 							writers[sbucket_id]->flush(buffers[sbucket_id]);
@@ -773,6 +998,20 @@ void kmer_Set_Light::create_super_buckets_regular(const string& input_file){
 					}
 				}
 				if(ref.size()-last_position>k-1){
+					bool waslast = superk.last;
+					if(!superk.last) {
+						superk = chopper.next();
+						check_superkemr(ref, *this, superk);
+					}
+					assert(superk.last);
+					cout << "O " << string(ref.data()+last_position, ref.length()-last_position+1) << " last" << endl;
+					cout << "N " << string(superk.str, superk.length) << " last" << endl;
+
+					assume(superk.minimizer == old_minimizer, "");
+
+						assume(ref.data()+last_position == superk.str, "");
+						assume(superk.length == ref.substr(last_position).length(), "");
+
 					size_t sbucket_id = old_minimizer/bucket_per_superBuckets;
 					if(buffers[sbucket_id].push(old_minimizer, ref, last_position, ref.length()-last_position))
 						writers[sbucket_id]->flush(buffers[sbucket_id]);
@@ -783,6 +1022,8 @@ void kmer_Set_Light::create_super_buckets_regular(const string& input_file){
 					#pragma omp atomic
 					all_mphf[old_minimizer/number_bucket_per_mphf].mphf_size+=(ref.substr(last_position)).size()-k+1;
 					all_mphf[old_minimizer/number_bucket_per_mphf].empty=false;
+				} else {
+					assert(superk.last);
 				}
 			}
 
