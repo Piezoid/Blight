@@ -378,28 +378,28 @@ struct SuperKChopper {
 				}
 				assume(_ring.front().pos > _mini_pos - _w, "WTF");
 			}
-			std::cout << "N " << kmer2str(_ring.front().canon << 1, _m) << std::endl;
+
 
 			if(changed) {
-				assert(_window_pos == prev_mini_pos - _w, "");
-				SuperKmer superk = { //_seq->data() + _window_pos,
-									 _seq->data() + prev_mini_pos - _w,
-									 //_mini_pos + _m - 1 - _window_pos,
-									 _mini_pos - prev_mini_pos + window_size(),
-									 prev_mini,
-									 false };
-				_mini_pos++;
+				SuperKmer superk;
+				//superk.str = _seq->data() + _window_pos,
+				superk.str = _seq->data() + prev_mini_pos - _w;
+				//superk.length = _mini_pos + _m - 1 - _window_pos;
+				superk.length = _mini_pos - prev_mini_pos + window_size();
+				superk.minimizer = prev_mini;
+				superk.last = false;
+				check_superkemr(*_seq, superk, window_size(), _m);
 
-				_window_pos = _mini_pos - _w;
+				_mini_pos++;
 				return superk;
 			}
 		}
-		assert(unsigned(_seq->length()) - _window_pos == _mini_pos - prev_mini_pos + window_size(), "");
-		SuperKmer superk = { _seq->data() + _window_pos,
-							 //_mini_pos + _m - 2 - _window_pos + ended(),
-							 unsigned(_seq->length()) - _window_pos,
-							 prev_mini,
-							true };
+
+		SuperKmer superk;
+		superk.str = _seq->data() + prev_mini_pos - _w;
+		superk.length = _mini_pos - prev_mini_pos + window_size();
+		superk.minimizer = prev_mini;
+		superk.last = true;
 		return superk;
 	}
 
@@ -412,17 +412,14 @@ private:
 		hash_t hash;
 	};
 
-
 	void first_window() {
-		_window_pos = 0;
 		assume(_seq->size() >= window_size(), "seq.length()=%llu < w=%llu", _seq->length(), size_t(window_size()));
-
-		std::cout << *_seq << std::endl;
-
 		_mini = str2num(_seq->substr(0, _m));
 		_minirc = rcb(_mini, _m);
-		std::cout << "0 " << kmer2str(_mini, _m) << std::endl;
-		ring_rec rec = { 0, (is_canonical(_mini) ? _mini : _minirc) >> 1 };
+
+		ring_rec rec;
+		rec.pos = 0;
+		rec.canon = (is_canonical(_mini) ? _mini : _minirc) >> 1;
 		rec.hash = revhash(rec.canon);
 		_ring.push_back(rec);
 
@@ -430,7 +427,6 @@ private:
 		for(_mini_pos = 1; _mini_pos < _w; _mini_pos++) {
 			update_mini();
 		}
-		std::cout << "N " << kmer2str(_ring.front().canon << 1, _m) << std::endl;
 	}
 
 	bool update_mini(minimizer_t prev_mini=0) {
@@ -440,9 +436,9 @@ private:
 		_minirc = (_minirc >> 2) | ((0b10 ^ nuc) * Pow2<mini_t>(2*(_m-1)));
 		assert(_minirc == rcb(_mini, _m), "Reversed sequence don't match the forward sequence");
 
-
-		std::cout << _mini_pos << " " << kmer2str(_mini, _m) << std::endl;
-		ring_rec rec { _mini_pos, (is_canonical(_mini) ? _mini : _minirc) >> 1 };
+		ring_rec rec;
+		rec.pos = _mini_pos;
+		rec.canon = (is_canonical(_mini) ? _mini : _minirc) >> 1;
 		rec.hash = revhash(rec.canon);
 
 		bool changed = false;
@@ -460,7 +456,6 @@ private:
 	const std::string* _seq;
 	KissRing<ring_rec> _ring;
 	unsigned _mini_pos;
-	unsigned _window_pos;
 	mini_t _mini;
 	mini_t _minirc;
 	ksize_t _w, _m;
@@ -492,7 +487,8 @@ inline minimizer_t minimizer_naive(kmer_t seq, ksize_t k, ksize_t m) {
 
 
 
-void check_superkemr(const std::string& seq, const SuperKChopper<>::SuperKmer& superk, ksize_t k, ksize_t m) {
+inline void check_superkemr(const std::string& seq, const SuperKChopper<>::SuperKmer& superk, ksize_t k, ksize_t m) {
+#ifndef NDEBUG
 	auto minik0 = minimizer_naive(str2num(std::string(superk.str, k)), k, m);
 
 	for(unsigned i = 1; i < superk.length - k ; ++i)
@@ -503,6 +499,7 @@ void check_superkemr(const std::string& seq, const SuperKChopper<>::SuperKmer& s
 
 	if(size_t(superk.str+superk.length+1 - seq.data()) < seq.length())
 		assert(minik0 != minimizer_naive(str2num(std::string(superk.str+superk.length-k+1, k)), k, m), "superkmer not maximal to the right");
+#endif
 }
 
 
@@ -548,10 +545,9 @@ public:
 
 	class Buffer {
 	public:
-		bool push(minimizer_t mini, const std::string& seq, size_t start, size_t len) {
+		bool push(minimizer_t mini, const char* str, size_t len) {
 			assume(_count < BATCH_SIZE, "count=%llu > BATCH_SIZE", _count);
-			assume(len + start <= seq.length(), "len=%llu + start=%llu > seq.length()=%llu", len, start, seq.length());
-			_superks[_count++] = { seq.data()+start, minimizer_t(len), mini };
+			_superks[_count++] = { str, minimizer_t(len), mini };
 			return _count >= BATCH_SIZE;
 		}
 
@@ -601,14 +597,14 @@ void kmer_Set_Light::create_super_buckets_regular(const std::string& input_file)
 	for(uint i(0);i<number_superbuckets;++i)
 		writers[i] = std::unique_ptr<SuperBucketWritter>(new SuperBucketWritter(i));
 
-	//#pragma omp parallel num_threads(_core_number)
+	#pragma omp parallel num_threads(_core_number)
 	{
+		SuperKChopper<> chopper(_k, _minimizer_length);
+
 		std::string refs[BATCH_SIZE];
 		for(auto& str : refs) str.reserve(1024);
 
 		auto buffers = std::unique_ptr<SuperBucketWritter::Buffer[]>(new SuperBucketWritter::Buffer[number_superbuckets.value()]());
-
-		minimizer_t old_minimizer,minimizer; //,precise_minimizer,old_precise_minimizer;
 		while(not inUnitigs.eof()){
 			unsigned nseq = 0;
 			#pragma omp critical(dataupdate)
@@ -629,80 +625,25 @@ void kmer_Set_Light::create_super_buckets_regular(const std::string& input_file)
 			}
 
 			if(nseq == 0) break;
-			minimizer_type old_minimizer,minimizer;
-			SuperKChopper<> chopper(_k, _minimizer_length);
+
 			for(unsigned seq_idx=0 ; seq_idx < nseq ; seq_idx++) {
-				const std::string& ref = refs[seq_idx];
-				chopper.reset(ref);
-
-
-				old_minimizer=minimizer=minimizer_number.value();
-				uint last_position(0);
-				//FOREACH KMER
-				kmer_t seq(str2num(ref.substr(0,_k))),rcSeq(rcb(seq,_k)); //canon(min_k(seq,rcSeq));
-				minimizer=minimizer_naive(seq, _k, _minimizer_length);
-				std::cout << "O " << kmer2str(minimizer << 1, _minimizer_length) << std::endl;
-				old_minimizer=minimizer;
-				uint i(0);
+				chopper.reset(refs[seq_idx]);
 				SuperKChopper<>::SuperKmer superk;
-				superk.last = false;
-				for(;i+_k<ref.size();++i){
-					updateK(seq,ref[i+_k]);
-					updateRCK(rcSeq,ref[i+_k]);
-					//COMPUTE KMER MINIMIZER
-					minimizer=minimizer_naive(seq, _k, _minimizer_length);
+				do {
+					superk = chopper.next();
 
-					std::cout << "O " << kmer2str(minimizer << 1, _minimizer_length) << std::endl;
-					if(old_minimizer!=minimizer){
-						superk = chopper.next();
-						check_superkemr(ref, superk, _k, _minimizer_length);
-						std::cout << "O " << std::string(ref.data()+last_position,i-last_position+_k) << std::endl;
-						std::cout << "N " << std::string(superk.str, superk.length) << std::endl;
-						assume(superk.minimizer == old_minimizer, "");
-						assume(ref.data()+last_position == superk.str, "");
-						assume(superk.length == i-last_position+_k, "");
-						size_t sbucket_id = old_minimizer/bucket_per_superBuckets;
-						if(buffers[sbucket_id].push(old_minimizer, ref, last_position,i-last_position+_k))
-							writers[sbucket_id]->flush(buffers[sbucket_id]);
+					size_t sbucket_id = superk.minimizer/bucket_per_superBuckets;
+					if(buffers[sbucket_id].push(superk.minimizer, superk.str, superk.length))
+					writers[sbucket_id]->flush(buffers[sbucket_id]);
 
-						#pragma omp atomic
-						all_buckets[old_minimizer].nuc_minimizer+=(i-last_position+_k);
-						#pragma omp atomic
-						all_mphf[old_minimizer/number_bucket_per_mphf].mphf_size+=(i-last_position+_k)-_k+1;
-						all_mphf[old_minimizer/number_bucket_per_mphf].empty=false;
-						#pragma omp atomic
-						total_nuc_number+=(i-last_position+_k);
-						last_position=i+1;
-						old_minimizer=minimizer;
-					}
-				}
-				if(ref.size()-last_position>size_t(_k-1)){
-					if(!superk.last) {
-						superk = chopper.next();
-						check_superkemr(ref, superk, _k, _minimizer_length);
-					}
-					assert(superk.last, "");
-					std::cout << "O " << std::string(ref.data()+last_position, ref.length()-last_position+1) << " last" << std::endl;
-					std::cout << "N " << std::string(superk.str, superk.length) << " last" << std::endl;
-
-					assume(superk.minimizer == old_minimizer, "");
-
-						assume(ref.data()+last_position == superk.str, "");
-						assume(superk.length == ref.substr(last_position).length(), "");
-
-					size_t sbucket_id = old_minimizer/bucket_per_superBuckets;
-					if(buffers[sbucket_id].push(old_minimizer, ref, last_position, ref.length()-last_position))
-						writers[sbucket_id]->flush(buffers[sbucket_id]);
 					#pragma omp atomic
-					all_buckets[old_minimizer].nuc_minimizer+=(ref.substr(last_position)).size();
+					all_buckets[superk.minimizer].nuc_minimizer+=superk.length;
 					#pragma omp atomic
-					total_nuc_number+=(ref.substr(last_position)).size();
+					all_mphf[superk.minimizer/number_bucket_per_mphf].mphf_size+=superk.length-_k+1;
+					all_mphf[superk.minimizer/number_bucket_per_mphf].empty=false;
 					#pragma omp atomic
-					all_mphf[old_minimizer/number_bucket_per_mphf].mphf_size+=(ref.substr(last_position)).size()-_k+1;
-					all_mphf[old_minimizer/number_bucket_per_mphf].empty=false;
-				} else {
-					assert(superk.last, "");
-				}
+					total_nuc_number+=superk.length;
+				} while(!superk.last);
 			}
 
 			// We need to flush all the buffers as the unitig strings will be invalidated with the next batch
@@ -850,7 +791,7 @@ inline kmer_t kmer_Set_Light::update_kmer_local(uint64_t pos,const std::vector<b
 
 
 void kmer_Set_Light::create_mphf(uint begin_BC,uint end_BC){
-    #pragma omp parallel  num_threads(_core_number)
+	#pragma omp parallel  num_threads(_core_number)
 		{
 		std::vector<kmer_t> anchors;
 		uint largest_bucket_anchor(0);
@@ -918,7 +859,7 @@ uint32_t kmer_Set_Light::bool_to_int(bitsize_t n_bits_to_encode,uint64_t pos,uin
 
 
 void kmer_Set_Light::fill_positions(uint begin_BC,uint end_BC){
-    #pragma omp parallel for num_threads(_core_number)
+	#pragma omp parallel for num_threads(_core_number)
 	for(uint BC=(begin_BC);BC<end_BC;++BC){
 			if(all_buckets[BC].nuc_minimizer>0){
 				int n_bits_to_encode(all_mphf[BC/number_bucket_per_mphf].bit_to_encode);
@@ -967,7 +908,7 @@ int64_t kmer_Set_Light::correct_pos(uint32_t mini, uint64_t p){
 
 
 bool kmer_Set_Light::query_kmer_bool(kmer_t canon){
-	    uint32_t min(minimizer_naive(canon, _k, _minimizer_length));
+		uint32_t min(minimizer_naive(canon, _k, _minimizer_length));
 		return single_query(min,canon);
 
 }
@@ -977,7 +918,7 @@ bool kmer_Set_Light::query_kmer_bool(kmer_t canon){
 int64_t kmer_Set_Light::query_kmer_hash(kmer_t canon){
 
 		//~ cout<<query_get_hash(canon,regular_minimizer(canon))<<endl;
-	    return query_get_hash(canon,minimizer_naive(canon, _k, _minimizer_length));
+		return query_get_hash(canon,minimizer_naive(canon, _k, _minimizer_length));
 
 }
 
@@ -1180,7 +1121,7 @@ void kmer_Set_Light::file_query(const std::string& query_file){
 	auto t1 = high_resolution_clock::now();
 	zstr::ifstream in(query_file);
 	uint64_t TP(0),FP(0);
-    #pragma omp parallel num_threads(_core_number)
+	#pragma omp parallel num_threads(_core_number)
 	{
 		string queries[BATCH_SIZE];
 		for(auto& str : queries) str.reserve(1024);
