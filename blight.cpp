@@ -599,58 +599,89 @@ void kmer_Set_Light::create_super_buckets_regular(const std::string& input_file)
 
 	#pragma omp parallel num_threads(_core_number)
 	{
-		SuperKChopper<> chopper(_k, _minimizer_length);
+		struct bucket_counters {
+			uint32_t superkmers_count = 0;
+			uint32_t extensions_count = 0;
+		};
+		auto counters = std::unique_ptr<bucket_counters[]>(new bucket_counters[minimizer_number.value()]());
 
-		std::string refs[BATCH_SIZE];
-		for(auto& str : refs) str.reserve(1024);
+		{ // Block for ressources management (buffers)
+			SuperKChopper<> chopper(_k, _minimizer_length);
 
-		auto buffers = std::unique_ptr<SuperBucketWritter::Buffer[]>(new SuperBucketWritter::Buffer[number_superbuckets.value()]());
-		while(not inUnitigs.eof()){
-			unsigned nseq = 0;
-			#pragma omp critical(dataupdate)
-			{
-				for(nseq = 0; nseq < BATCH_SIZE && not inUnitigs.eof();) {
-					std::string& ref = refs[nseq];
-					getline(inUnitigs,ref); // Skip this one
-					if(ref.empty()) {
+			std::string refs[BATCH_SIZE];
+			for(auto& str : refs) str.reserve(1024);
+
+			auto buffers = std::unique_ptr<SuperBucketWritter::Buffer[]>(new SuperBucketWritter::Buffer[number_superbuckets.value()]());
+
+			// For each sequence batch
+			while(not inUnitigs.eof()){
+				unsigned nseq = 0;
+				#pragma omp critical(dataupdate)
+				{
+					for(nseq = 0; nseq < BATCH_SIZE && not inUnitigs.eof();) {
+						std::string& ref = refs[nseq];
+						getline(inUnitigs,ref); // Skip this one
+						if(ref.empty()) {
+							getline(inUnitigs,ref);
+							continue;
+						}
 						getline(inUnitigs,ref);
-						continue;
+						if(ref.empty()) {
+							continue;
+						}
+						nseq++;
 					}
-					getline(inUnitigs,ref);
-					if(ref.empty()) {
-						continue;
-					}
-					nseq++;
 				}
-			}
 
-			if(nseq == 0) break;
+				if(nseq == 0) break;
 
-			for(unsigned seq_idx=0 ; seq_idx < nseq ; seq_idx++) {
-				chopper.reset(refs[seq_idx]);
-				SuperKChopper<>::SuperKmer superk;
-				do {
-					superk = chopper.next();
+				// For each sequence
+				for(unsigned seq_idx=0 ; seq_idx < nseq ; seq_idx++) {
+					chopper.reset(refs[seq_idx]);
+					SuperKChopper<>::SuperKmer superk;
+					// For each superkmer
+					do {
+						superk = chopper.next();
 
-					size_t sbucket_id = superk.minimizer/bucket_per_superBuckets;
-					if(buffers[sbucket_id].push(superk.minimizer, superk.str, superk.length))
+						size_t sbucket_id = superk.minimizer/bucket_per_superBuckets;
+						if(buffers[sbucket_id].push(superk.minimizer, superk.str, superk.length))
+						writers[sbucket_id]->flush(buffers[sbucket_id]);
+
+						auto& bucket_counter = counters[superk.minimizer];
+						bucket_counter.superkmers_count++;
+						bucket_counter.extensions_count += superk.length - _k;
+					} while(!superk.last);
+				}
+
+				// We need to flush all the buffers as the unitig strings will be invalidated with the next batch
+				for(size_t sbucket_id=0 ; sbucket_id < number_superbuckets ; sbucket_id++)
 					writers[sbucket_id]->flush(buffers[sbucket_id]);
+			} // Goto next batch
 
+		} // Release buffers
+
+			// Export thread local statistics
+			size_t nuc_number=0;
+			// For each MPHF
+			for(minimizer_t mphf = 0, bucket=0 ; mphf < mphf_number ; mphf++) {
+				size_t mphf_size = 0;
+				// for each bucket
+				for(; bucket < (mphf+1)*number_bucket_per_mphf ; bucket++) {
+					auto& bucket_counter = counters[bucket];
+					uint32_t nucs = _k*bucket_counter.superkmers_count + bucket_counter.extensions_count;
+					uint32_t kmers = bucket_counter.superkmers_count + bucket_counter.extensions_count;
+					mphf_size += kmers;
+					nuc_number += nucs;
 					#pragma omp atomic
-					all_buckets[superk.minimizer].nuc_minimizer+=superk.length;
-					#pragma omp atomic
-					all_mphf[superk.minimizer/number_bucket_per_mphf].mphf_size+=superk.length-_k+1;
-					all_mphf[superk.minimizer/number_bucket_per_mphf].empty=false;
-					#pragma omp atomic
-					total_nuc_number+=superk.length;
-				} while(!superk.last);
+					all_buckets[bucket].nuc_minimizer += nucs;
+				}
+				#pragma omp atomic
+				all_mphf[mphf].mphf_size += mphf_size;
+				all_mphf[mphf].empty=false;
 			}
-
-			// We need to flush all the buffers as the unitig strings will be invalidated with the next batch
-			for(size_t sbucket_id=0 ; sbucket_id < number_superbuckets ; sbucket_id++)
-				writers[sbucket_id]->flush(buffers[sbucket_id]);
-		}
-	}
+			#pragma omp atomic
+			total_nuc_number+=nuc_number;
+	} // End parrallel section
 
 	bucketSeq.resize(total_nuc_number*2);
 	bucketSeq.shrink_to_fit();
