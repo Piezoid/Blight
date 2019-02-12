@@ -74,18 +74,17 @@ public:
 	using MPHF = boomphf::mphf<kmer_t, boomphf::SingleHashFunctor<kmer_t> >;
 
 	struct info_mphf{
-		size_t mphf_size;
-		size_t start;
-		MPHF* kmer_MPHF;
-		bitsize_t bit_to_encode;
-		bool empty;
+		size_t mphf_size = 0;
+		size_t start = 0;
+		std::unique_ptr<MPHF> kmer_MPHF = {};
+		bitsize_t bit_to_encode = 0;
 	};
 
 	std::vector<bool> bucketSeq;
 	std::vector<bool> positions;
 	std::vector<bool>* Valid_kmer;
-	bucket_minimizer* all_buckets;
-	info_mphf* all_mphf;
+	std::unique_ptr<bucket_minimizer[]> all_buckets;
+	std::unique_ptr<info_mphf[]> all_mphf;
 
 	size_t number_kmer = 0;
 	size_t number_super_kmer = 0;
@@ -129,24 +128,10 @@ public:
 		if(log2_superbuckets_number > log2_mphfs_number)
 			throw std::invalid_argument("log2_superbuckets_number must not be larger than log2_mphfs_number");
 
-		all_buckets=new bucket_minimizer[minimizer_number.value()]();
-		all_mphf=new info_mphf[mphf_number.value()];
-		for(uint i(0);i<mphf_number;++i){
-			all_mphf[i].mphf_size=0;
-			all_mphf[i].bit_to_encode=0;
-			all_mphf[i].start=0;
-			all_mphf[i].empty=true;
-		}
+		all_buckets=std::unique_ptr<bucket_minimizer[]>(new bucket_minimizer[minimizer_number.value()]());
+		all_mphf=std::unique_ptr<info_mphf[]>(new info_mphf[mphf_number.value()]());
 	}
 
-	~kmer_Set_Light () {
-		delete[] all_buckets;
-		for(uint i(0);i<mphf_number;++i){
-			delete all_mphf[i].kmer_MPHF;
-		}
-		delete[] all_mphf;
-		//~ delete[] abundance_minimizer;;
-	}
 
 	bool exists(const kmer_t& query);
 	void create_super_buckets(const std::string& input_file);

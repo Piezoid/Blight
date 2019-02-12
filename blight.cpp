@@ -677,7 +677,6 @@ void kmer_Set_Light::create_super_buckets_regular(const std::string& input_file)
 				}
 				#pragma omp atomic
 				all_mphf[mphf].mphf_size += mphf_size;
-				all_mphf[mphf].empty=false;
 			}
 			#pragma omp atomic
 			total_nuc_number+=nuc_number;
@@ -689,18 +688,21 @@ void kmer_Set_Light::create_super_buckets_regular(const std::string& input_file)
 	uint max_bucket_mphf(0);
 	uint64_t hash_base(0),old_hash_base(0);
 	for(uint BC(0);BC<minimizer_number;++BC){
-		all_buckets[BC].start=i;
-		all_buckets[BC].current_pos=i;
-		i+=all_buckets[BC].nuc_minimizer;
-		max_bucket_mphf=std::max(all_buckets[BC].nuc_minimizer,max_bucket_mphf);
+		auto& bucket = all_buckets[BC];
+		bucket.start=i;
+		bucket.current_pos=i;
+		i+=bucket.nuc_minimizer;
+		max_bucket_mphf=std::max(bucket.nuc_minimizer,max_bucket_mphf);
+
 		if((BC+1)%number_bucket_per_mphf==0){
 			int n_bits_to_encode((ceil(log2(max_bucket_mphf+1))-bit_saved_sub));
 			if(n_bits_to_encode<1){n_bits_to_encode=1;}
-			all_mphf[BC/number_bucket_per_mphf].bit_to_encode=n_bits_to_encode;
-			all_mphf[BC/number_bucket_per_mphf].start=total_pos_size;
-			total_pos_size+=round_eight(n_bits_to_encode*all_mphf[BC/number_bucket_per_mphf].mphf_size);
-			hash_base+=all_mphf[(BC/number_bucket_per_mphf)].mphf_size;
-			all_mphf[BC/number_bucket_per_mphf].mphf_size=old_hash_base;
+			auto& mphf_info = all_mphf[BC/number_bucket_per_mphf];
+			mphf_info.bit_to_encode=n_bits_to_encode;
+			mphf_info.start=total_pos_size;
+			total_pos_size+=round_eight(n_bits_to_encode*mphf_info.mphf_size);
+			hash_base+=mphf_info.mphf_size;
+			mphf_info.mphf_size=old_hash_base;
 			old_hash_base=hash_base;
 			max_bucket_mphf=0;
 		}
@@ -825,7 +827,6 @@ void kmer_Set_Light::create_mphf(uint begin_BC,uint end_BC){
 	#pragma omp parallel  num_threads(_core_number)
 		{
 		std::vector<kmer_t> anchors;
-		uint largest_bucket_anchor(0);
 		uint largest_bucket_nuc(0);
 		#pragma omp for schedule(dynamic, number_bucket_per_mphf.value())
 		for(uint BC=(begin_BC);BC<end_BC;++BC){
@@ -852,14 +853,12 @@ void kmer_Set_Light::create_mphf(uint begin_BC,uint end_BC){
 						bucketSize++;
 					}
 				}
-				largest_bucket_anchor=std::max(largest_bucket_anchor,bucketSize);
 			}
 			if((BC+1)%number_bucket_per_mphf==0 and not anchors.empty()){
 				largest_MPHF=std::max(largest_MPHF,anchors.size());
-				all_mphf[BC/number_bucket_per_mphf].kmer_MPHF= new MPHF(anchors.size(),anchors,gammaFactor);
+				all_mphf[BC/number_bucket_per_mphf].kmer_MPHF= std::unique_ptr<MPHF>(new MPHF(anchors.size(),anchors,gammaFactor));
 				anchors.clear();
-				largest_bucket_anchor=0;
-				largest_bucket_nuc=(0);
+				largest_bucket_nuc=0;
 			}
 		}
 	}
@@ -893,7 +892,9 @@ void kmer_Set_Light::fill_positions(uint begin_BC,uint end_BC){
 	#pragma omp parallel for num_threads(_core_number)
 	for(uint BC=(begin_BC);BC<end_BC;++BC){
 			if(all_buckets[BC].nuc_minimizer>0){
-				int n_bits_to_encode(all_mphf[BC/number_bucket_per_mphf].bit_to_encode);
+				auto& mphf_info = all_mphf[BC/number_bucket_per_mphf];
+				assume(mphf_info.kmer_MPHF != nullptr, "Empty MPHF");
+				int n_bits_to_encode(mphf_info.bit_to_encode);
 				kmer_t seq(get_kmer(BC,0)),rcSeq(rcb(seq,_k)),canon(min_k(seq,rcSeq));
 				for(uint j(0);(j+_k)<all_buckets[BC].nuc_minimizer;j++){
 					if(not Valid_kmer[BC%bucket_per_superBuckets][j+1]){
@@ -902,7 +903,7 @@ void kmer_Set_Light::fill_positions(uint begin_BC,uint end_BC){
 							seq=(get_kmer(BC,j+1)),rcSeq=(rcb(seq,_k)),canon=(min_k(seq,rcSeq));
 							//~ #pragma omp critical(dataupdate)
 							{
-								int_to_bool(n_bits_to_encode,(j+1)/positions_to_check,all_mphf[BC/number_bucket_per_mphf].kmer_MPHF->lookup(canon),all_mphf[BC/number_bucket_per_mphf].start);
+								int_to_bool(n_bits_to_encode,(j+1)/positions_to_check,mphf_info.kmer_MPHF->lookup(canon),mphf_info.start);
 							}
 						}
 					}else{
@@ -911,7 +912,7 @@ void kmer_Set_Light::fill_positions(uint begin_BC,uint end_BC){
 						canon=(min_k(seq, rcSeq));
 						//~ #pragma omp critical(dataupdate)
 						{
-							int_to_bool(n_bits_to_encode,(j+1)/positions_to_check,all_mphf[BC/number_bucket_per_mphf].kmer_MPHF->lookup(canon),all_mphf[BC/number_bucket_per_mphf].start);
+							int_to_bool(n_bits_to_encode,(j+1)/positions_to_check,mphf_info.kmer_MPHF->lookup(canon),mphf_info.start);
 						}
 					}
 				}
@@ -1090,15 +1091,16 @@ uint kmer_Set_Light::multiple_query_optimized(uint32_t minimizer, const std::vec
 inline int32_t kmer_Set_Light::query_get_pos_unitig(const kmer_t canon,uint minimizer){
 	#pragma omp atomic
 	number_query++;
-	if(unlikely(all_mphf[minimizer/number_bucket_per_mphf].empty))
+	if(unlikely(all_buckets[minimizer].nuc_minimizer == 0))
 		return -1;
 
-	uint64_t hash=(all_mphf[minimizer/number_bucket_per_mphf].kmer_MPHF->lookup(canon));
+	const auto& mphf_info = all_mphf[minimizer/number_bucket_per_mphf];
+	assume(mphf_info.kmer_MPHF != nullptr, "Empty MPHF for non empty bucket");
+	uint64_t hash=mphf_info.kmer_MPHF->lookup(canon);
 	if(unlikely(hash == ULLONG_MAX))
 		return -1;
 
-	int n_bits_to_encode(all_mphf[minimizer/number_bucket_per_mphf].bit_to_encode);
-	uint64_t pos(bool_to_int( n_bits_to_encode, hash, all_mphf[minimizer/number_bucket_per_mphf].start));
+	uint64_t pos(bool_to_int(mphf_info.bit_to_encode, hash, mphf_info.start));
 	if(likely((pos+_k-1)<all_buckets[minimizer].nuc_minimizer)){
 		kmer_t seqR=get_kmer(minimizer,pos);
 		kmer_t rcSeqR, canonR;
@@ -1119,15 +1121,16 @@ inline int32_t kmer_Set_Light::query_get_pos_unitig(const kmer_t canon,uint mini
 int64_t kmer_Set_Light::query_get_hash(const kmer_t canon,uint minimizer){
 	#pragma omp atomic
 	number_query++;
-	if(unlikely(all_mphf[minimizer/number_bucket_per_mphf].empty))
+	if(unlikely(all_buckets[minimizer].nuc_minimizer == 0))
 		return -1;
 
-	uint64_t hash=(all_mphf[minimizer/number_bucket_per_mphf].kmer_MPHF->lookup(canon));
+	const auto& mphf_info = all_mphf[minimizer/number_bucket_per_mphf];
+	assume(mphf_info.kmer_MPHF != nullptr, "Empty MPHF for non empty bucket");
+	uint64_t hash=mphf_info.kmer_MPHF->lookup(canon);
 	if(unlikely(hash == ULLONG_MAX))
 		return -1;
 
-	int n_bits_to_encode(all_mphf[minimizer/number_bucket_per_mphf].bit_to_encode);
-	uint64_t pos(bool_to_int( n_bits_to_encode, hash, all_mphf[minimizer/number_bucket_per_mphf].start));
+	uint64_t pos(bool_to_int(mphf_info.bit_to_encode, hash, mphf_info.start));
 	if(likely((pos+_k-1)<all_buckets[minimizer].nuc_minimizer)){
 		kmer_t seqR=get_kmer(minimizer,pos);
 		kmer_t rcSeqR, canonR;
@@ -1135,7 +1138,7 @@ int64_t kmer_Set_Light::query_get_hash(const kmer_t canon,uint minimizer){
 			rcSeqR=(rcb(seqR,_k));
 			canonR=(min_k(seqR, rcSeqR));
 			if(canon==canonR){
-				return hash+all_mphf[minimizer/number_bucket_per_mphf].mphf_size;
+				return hash+mphf_info.mphf_size;
 			}
 			seqR=update_kmer(j+_k,minimizer,seqR);//can be avoided
 		}
