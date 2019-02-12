@@ -388,7 +388,7 @@ struct SuperKChopper {
 	// Window size in nucleotides, including the minimizer
 	ksize_t window_size() const { return _w + getm() - 1; }
 	//bool ended() { return _mini_pos + _m  > _seq->length(); }
-	bool ended() { return _seq->begin() + _mini_pos + getm() > _seq->end(); }
+	bool ended() { return _seq->begin() + _ring.back().pos + getm() >= _seq->end(); }
 
 	struct SuperKmer {
 		const char* str;
@@ -400,37 +400,39 @@ struct SuperKChopper {
 	SuperKmer next() {
 		bool changed = false;
 		mini_t prev_mini = _ring.front().canon;
-		unsigned prev_mini_pos = _mini_pos;
-		for(; not ended() && not changed; _mini_pos++) {
-			changed = update_mini(prev_mini);
-			if(not changed) { // No new minimum entering the right side
-				// Check for the current minimum going out on the left
-				if(_ring.front().pos <= _mini_pos - _w) {
-					_ring.pop_front();
-					changed = prev_mini != _ring.front().canon;
+		unsigned prev_mini_pos = _ring.back().pos+1;
+		// 8181616
+		for(; not ended() ;) {
+			// 93593784 = 11.4x
+			changed = update_mini();
+			if(not changed) {
+				continue;
+			} else {
+				// 7800137 = 8.33%
+				if(prev_mini != _ring.front().canon) {
+					// 7768503 = 8.30%
+					// Identity check reject 0.4% of changes
+					SuperKmer superk;
+					//superk.str = _seq->data() + _window_pos,
+					superk.str = _seq->data() + prev_mini_pos - _w;
+					//superk.length = _mini_pos + _m - 1 - _window_pos;
+					superk.length = _ring.back().pos - prev_mini_pos + window_size();
+					superk.minimizer = prev_mini;
+					superk.last = false;
+					check_superkemr(*_seq, superk, window_size(), getm());
+
+
+					return superk;
+				} else {
+					// 31634 = 0.4%
+					continue;
 				}
-				assume(_ring.front().pos > _mini_pos - _w, "WTF");
-			}
-
-
-			if(changed) {
-				SuperKmer superk;
-				//superk.str = _seq->data() + _window_pos,
-				superk.str = _seq->data() + prev_mini_pos - _w;
-				//superk.length = _mini_pos + _m - 1 - _window_pos;
-				superk.length = _mini_pos - prev_mini_pos + window_size();
-				superk.minimizer = prev_mini;
-				superk.last = false;
-				check_superkemr(*_seq, superk, window_size(), getm());
-
-				_mini_pos++;
-				return superk;
 			}
 		}
 
 		SuperKmer superk;
 		superk.str = _seq->data() + prev_mini_pos - _w;
-		superk.length = _mini_pos - prev_mini_pos + window_size();
+		superk.length = _ring.back().pos+1 - prev_mini_pos + window_size();
 		superk.minimizer = prev_mini;
 		superk.last = true;
 		return superk;
@@ -447,44 +449,85 @@ private:
 
 	void first_window() {
 		assume(_seq->size() >= window_size(), "seq.length()=%llu < w=%llu", _seq->length(), size_t(window_size()));
-		_mini.fill(_seq->data());
+		const char* it = _seq->data();
+
+		_mini.fill(it);
+		it += _mini.size();
 
 		ring_rec rec;
 		rec.pos = 0;
 		rec.canon = _mini.canon();
 		rec.hash = revhash(rec.canon);
 		_ring.push_back(rec);
+		rec.pos++;
 
 		// Fill the first window
-		for(_mini_pos = 1; _mini_pos < _w; _mini_pos++) {
-			update_mini();
+		for(; rec.pos < _w;  rec.pos++) {
+			_mini.push_back(it++);
+			rec.canon = _mini.canon();
+			rec.hash = revhash(rec.canon);
+
+			while(_ring.back().hash >= rec.hash) {
+				_ring.pop_back();
+				if(_ring.empty())
+					break;
+			}
+
+			_ring.push_back(rec);
 		}
 	}
 
-	bool update_mini(minimizer_t prev_mini=0) {
-		assume(_mini_pos + getm() - 1 < _seq->length(), "");
-		_mini.push_back(_seq->data() + (_mini_pos + getm() - 1));
-
-		ring_rec rec;
-		rec.pos = _mini_pos;
+	bool update_mini() {
+		ring_rec rec = _ring.back();
+		rec.pos++;
+		assume(rec.pos + getm() - 1 < _seq->length(), "");
+		_mini.push_back(_seq->data() + (rec.pos + getm() - 1));
 		rec.canon = _mini.canon();
 		rec.hash = revhash(rec.canon);
 
-		bool changed = false;
+		// 93593784
 		if(_ring.back().hash >= rec.hash) {
-			do _ring.pop_back(); while(not _ring.empty() && _ring.back().hash >= rec.hash);
-			changed = _ring.empty() && rec.canon != prev_mini;
+			// 46925816 = 50%
+			do _ring.pop_back(); while(not _ring.empty() && _ring.back().hash >= rec.hash); // 89712684 = 1.91x
+
+			if(not _ring.empty()) { // No new minimum entering the right side
+				// 43011285 = 46%
+				_ring.push_back(rec);
+				// Check for the current minimum going out on the left
+				if(_ring.front().pos + _w > rec.pos ) {
+					// 41063396 = 43.9%
+					return false;
+				} else {
+					// 1947889 = 2.1%
+					_ring.pop_front();
+					return true;
+				}
+				assume(_ring.front().pos > rec.pos - _w, "WTF");
+			} else {
+				// 3914531 = 4%
+				_ring.push_back(rec);
+				return true;
+			}
+		} else { // No new minimum entering the right side
+			// 46667968 = 50%
+			_ring.push_back(rec);
+			// Check for the current minimum going out on the left
+			if(_ring.front().pos + _w > rec.pos ) {
+				// 44730251 = 47.8
+				return false;
+			}  else {
+				// 1937717 = 2.1%
+				_ring.pop_front();
+				return true;
+			}
+			assume(_ring.front().pos > rec.pos - _w, "WTF");
 		}
-
-		_ring.push_back(rec);
-
-		return changed;
+		// return true = 8.3%
 	}
 
 
 	const std::string* _seq;
 	KissRing<ring_rec> _ring;
-	unsigned _mini_pos;
 	SlidingKMer<minimizer_t, MinimizerCanonical> _mini;
 	ksize_t _w;
 };
