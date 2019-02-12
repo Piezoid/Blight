@@ -1,51 +1,14 @@
 #ifndef KSL
 #define KSL
 
-#include <cstdint>
-#include <cstdio>
 #include <memory>
 #include <vector>
 #include <iostream>
 
 #include "common.h"
 #include "bbhash.h"
+#include "kmer.h"
 
-using bitsize_t   = uint_fast8_t; // Bits indices
-using ksize_t     = bitsize_t;    // Nucleotide incides
-using kmer_t      = uint64_t;     // k-mers, uint64_t for k<32, uint64_t for k<64
-using minimizer_t = uint32_t;     // Minimizers
-
-
-// Represents the cardinality of a pow2 sized set. Allows div/mod arithmetic operations on indexes.
-template<typename T>
-struct Pow2 {
-	Pow2(uint_fast8_t bits) : _bits(bits) {
-		assume(bits < CHAR_BIT*sizeof(T), "Pow2(%u > %u)", unsigned(bits), unsigned(CHAR_BIT*sizeof(T)));
-	}
-
-	uint_fast8_t bits() const { return _bits; }
-	T value() const { return T(1) << _bits; }
-	explicit operator T() const { return value(); }
-	T max() const { return value() - T(1); }
-
-
-	friend T operator*(const T& x, const Pow2& y) { return x << y._bits; }
-	friend T& operator*=(T& x, const Pow2& y) { return x <<= y._bits; }
-	friend T operator/(const T& x, const Pow2& y) { return x >> y._bits; }
-	friend T& operator/=(T& x, const Pow2& y) { return x >>= y._bits; }
-	friend T operator%(const T& x, const Pow2& y) { return x & y.max(); }
-	friend T& operator%=(T& x, const Pow2& y) { return x &= y.max(); }
-	Pow2& operator>>=(uint_fast8_t d) { _bits -= d; return *this; }
-	Pow2& operator<<=(uint_fast8_t d) { _bits += d; return *this; }
-	friend bool operator<(const T& x, const Pow2& y) { return x < y.value(); }
-	friend bool operator<=(const T& x, const Pow2& y) { return x < y.value(); }
-	friend T operator+(const T& x, const Pow2& y) { return x + y.value(); }
-	friend T& operator+=(T& x, const Pow2& y) { return x += y.value(); }
-	friend T operator-(const T& x, const Pow2& y) { return x - y.value(); }
-	friend T& operator-=(T& x, const Pow2& y) { return x -= y.value(); }
-private:
-	bitsize_t _bits;
-};
 
 
 
@@ -139,8 +102,6 @@ public:
 	void create_mphf(uint32_t beg,uint32_t end);
 	void updateK(kmer_t& min, char nuc);
 	void updateRCK(kmer_t& min, char nuc);
-	void updateM(kmer_t& min, char nuc);
-	void updateRCM(kmer_t& min, char nuc);
 	void fill_positions(uint32_t beg,uint32_t end);
 	bool exists(const std::string& query);
 	void multiple_query(const std::string& query);
