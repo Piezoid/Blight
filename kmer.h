@@ -231,7 +231,61 @@ inline uint32_t rcb(uint32_t in, uint n) {
 	return res;
 }
 
+// Iterator on char bitvector.
+// NB: the array must be zeroed before setting DNA as only ORing is done for performance reasons
+struct DnaBitStringInterator {
+	using difference_type = ptrdiff_t;
+	using value_type = nuc_t;
 
+	struct reference {
+		operator nuc_t() {
+			ksize_t offset = _ptr & 0b11;
+			uint8_t* ptr = reinterpret_cast<uint8_t*>(_ptr >> 2);
+			return (*ptr >> offset) & 0b11;
+		}
+
+		reference& operator=(nuc_t n) {
+			ksize_t offset = _ptr & 0b11;
+			uint8_t* ptr = reinterpret_cast<uint8_t*>(_ptr >> 2);
+			*ptr |= uint8_t(n) << offset;
+			return *this;
+		}
+	protected:
+		friend class DnaBitStringInterator;
+		reference(uintptr_t ptr) : _ptr(ptr) {}
+		uintptr_t _ptr;
+	};
+
+	explicit DnaBitStringInterator(const uint8_t* ptr, ksize_t off=0) : _ptr((reinterpret_cast<uintptr_t>(ptr) << 2) + off) {}
+	DnaBitStringInterator(const DnaBitStringInterator&) = default;
+	DnaBitStringInterator& operator=(const DnaBitStringInterator&) = default;
+	DnaBitStringInterator(DnaBitStringInterator&&) = default;
+	DnaBitStringInterator& operator=(DnaBitStringInterator&&) = default;
+
+	reference operator*() const { return { _ptr }; }
+	reference operator[](difference_type d) const { return { _ptr + d }; }
+	DnaBitStringInterator& operator+=(difference_type d) { _ptr += d; return *this; }
+	DnaBitStringInterator& operator++() { ++_ptr; return *this; }
+	DnaBitStringInterator operator++(int) { return { _ptr+1 }; }
+	DnaBitStringInterator& operator-=(difference_type d) { _ptr -= d; return *this; }
+	DnaBitStringInterator& operator--() { _ptr--; return *this; }
+	DnaBitStringInterator operator--(int) { return { _ptr-1 }; }
+	difference_type operator-(const DnaBitStringInterator& other) const { return this->_ptr - other._ptr; }
+	bool operator<(const DnaBitStringInterator& other) const { return this->_ptr < other._ptr; }
+	bool operator!=(const DnaBitStringInterator& other) const { return this->_ptr != other._ptr; }
+	bool operator==(const DnaBitStringInterator& other) const { return this->_ptr == other._ptr; }
+protected:
+	DnaBitStringInterator(uintptr_t ptr) : _ptr(ptr) {}
+	uintptr_t _ptr;
+};
+
+
+
+struct DnaCharStringIterator {
+	struct reference {
+
+	};
+};
 
 struct LexicoCanonical {
 	template<typename T>
