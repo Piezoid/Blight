@@ -53,16 +53,25 @@ private:
 
 
 
-static inline uint8_t nuc2int(char c){
-	if(likely(c == 'a' || c == 'c' || c == 't' || c == 'g'
-		   || c == 'A' || c == 'C' || c == 'T' || c == 'G')) {
-		return (c >> 1) & 3;
-	} else throw std::domain_error("Invalid char in DNA");
+inline pure_fun hot_fun
+uint8_t nuc2int(char c){
+//	if((c == 'a' || c == 'c' || c == 't' || c == 'g'
+//		   || c == 'A' || c == 'C' || c == 'T' || c == 'G')) {
+//		return (c >> 1) & 3;
+//	}
+	uint8_t d = c - 65;
+	if(d <= 51) {
+		if(0x0008004500080045ull & (1ull << d)) {
+			return (c >> 1) & 3;
+		}
+	}
+	throw std::domain_error("Invalid char in DNA");
 }
 
 
 
-static inline std::string kmer2str(kmer_t num, ksize_t k){
+inline pure_fun hot_fun
+std::string kmer2str(kmer_t num, ksize_t k){
 	std::string res(k, 0);
 	Pow2<kmer_t> anc(2*(k-1));
 	for(uint i = 0 ; i < k; i++) {
@@ -78,7 +87,8 @@ static inline std::string kmer2str(kmer_t num, ksize_t k){
 
 
 
-inline kmer_t str2num(const std::string& str){
+inline pure_fun hot_fun
+kmer_t str2num(const std::string& str){
 	kmer_t res(0);
 	for(uint i=0;i<str.size();i++){
 		res <<= 2;
@@ -89,7 +99,8 @@ inline kmer_t str2num(const std::string& str){
 
 
 
-inline int32_t revhash ( uint32_t x ) {
+inline pure_fun hot_fun
+int32_t revhash ( uint32_t x ) {
 	x = ( ( x >> 16 ) ^ x ) * 0x2c1b3c6d;
 	x = ( ( x >> 16 ) ^ x ) * 0x297a2d39;
 	x = ( ( x >> 16 ) ^ x );
@@ -98,7 +109,8 @@ inline int32_t revhash ( uint32_t x ) {
 
 
 
-inline int32_t unrevhash ( uint32_t x ) {
+inline pure_fun hot_fun
+int32_t unrevhash ( uint32_t x ) {
 	x = ( ( x >> 16 ) ^ x ) * 0x0cf0b109; // PowerMod[0x297a2d39, -1, 2^32]
 	x = ( ( x >> 16 ) ^ x ) * 0x64ea2d65;
 	x = ( ( x >> 16 ) ^ x );
@@ -107,7 +119,8 @@ inline int32_t unrevhash ( uint32_t x ) {
 
 
 
-inline int64_t revhash ( uint64_t x ) {
+inline pure_fun hot_fun
+int64_t revhash ( uint64_t x ) {
 	x = ( ( x >> 32 ) ^ x ) * 0xD6E8FEB86659FD93;
 	x = ( ( x >> 32 ) ^ x ) * 0xD6E8FEB86659FD93;
 	x = ( ( x >> 32 ) ^ x );
@@ -116,7 +129,8 @@ inline int64_t revhash ( uint64_t x ) {
 
 
 
-inline int64_t unrevhash ( uint64_t x ) {
+inline pure_fun hot_fun
+int64_t unrevhash ( uint64_t x ) {
 	x = ( ( x >> 32 ) ^ x ) * 0xCFEE444D8B59A89B;
 	x = ( ( x >> 32 ) ^ x ) * 0xCFEE444D8B59A89B;
 	x = ( ( x >> 32 ) ^ x );
@@ -142,7 +156,8 @@ static inline size_t hash2(int i1)
 
 // It's quite complex to bitshift mmx register without an immediate (constant) count
 // See: https://stackoverflow.com/questions/34478328/the-best-way-to-shift-a-m128i
-inline __m128i mm_bitshift_left(__m128i x, unsigned count)
+inline pure_fun hot_fun
+__m128i mm_bitshift_left(__m128i x, unsigned count)
 {
 	assume(count < 128, "count=%u >= 128", count);
 	__m128i carry = _mm_slli_si128(x, 8);
@@ -157,7 +172,8 @@ inline __m128i mm_bitshift_left(__m128i x, unsigned count)
 
 
 
-inline __m128i mm_bitshift_right(__m128i x, unsigned count)
+inline pure_fun hot_fun
+__m128i mm_bitshift_right(__m128i x, unsigned count)
 {
 	assume(count < 128, "count=%u >= 128", count);
 	__m128i carry = _mm_srli_si128(x, 8);
@@ -172,7 +188,8 @@ inline __m128i mm_bitshift_right(__m128i x, unsigned count)
 
 
 
-inline __uint128_t rcb(const __uint128_t& in, uint n){
+inline pure_fun hot_fun
+__uint128_t rcb(const __uint128_t& in, uint n){
 	assume(n <= 64, "n=%u > 64", n);
 	union kmer_u { __uint128_t k; __m128i m128i; uint64_t u64[2]; uint8_t u8[16];};
 	kmer_u res = { .k = in };
@@ -198,7 +215,8 @@ inline __uint128_t rcb(const __uint128_t& in, uint n){
 
 
 
-inline uint64_t rcb(uint64_t in, uint n) {
+inline pure_fun hot_fun
+uint64_t rcb(uint64_t in, uint n) {
 	assume(n <= 32, "n=%u > 32", n);
 	// Complement, swap byte order
 	uint64_t res = __builtin_bswap64(in ^ 0xaaaaaaaaaaaaaaaa);
@@ -215,7 +233,8 @@ inline uint64_t rcb(uint64_t in, uint n) {
 
 
 
-inline uint32_t rcb(uint32_t in, uint n) {
+inline pure_fun hot_fun
+uint32_t rcb(uint32_t in, uint n) {
 	assume(n <= 16, "n=%u > 16", n);
 	// Complement, swap byte order
 	uint32_t res = __builtin_bswap32(in ^ 0xaaaaaaaa);
@@ -231,74 +250,240 @@ inline uint32_t rcb(uint32_t in, uint n) {
 	return res;
 }
 
-// Iterator on char bitvector.
-// NB: the array must be zeroed before setting DNA as only ORing is done for performance reasons
-struct DnaBitStringInterator {
+
+
+
+namespace details {
+
+template<class C>
+struct random_iter_traits {
+	using difference = ptrdiff_t; // Pretty universal for random iterators
+};
+
+
+// Completes the definition of random iterator wrappers
+template<typename Base>
+struct random_iter_wrapper : public Base {
+	using difference_type = typename Base::difference_type;
+	using reference = typename Base::reference;
+	using iterator_category = std::random_access_iterator_tag;
+	using Base::Base;
+
+	random_iter_wrapper(const random_iter_wrapper&) = default;
+	random_iter_wrapper& operator=(const random_iter_wrapper&) = default;
+	random_iter_wrapper(random_iter_wrapper&&) = default;
+	random_iter_wrapper& operator=(random_iter_wrapper&&) = default;
+
+	reference operator*() const { return { _repr }; }
+	reference operator[](difference_type d) const { return { _repr + d }; }
+//	random_iter_wrapper& operator+=(difference_type d) { _repr += d; return *this; }
+	random_iter_wrapper operator+(difference_type d) { return { _repr + d }; }
+	random_iter_wrapper& operator++() { ++_repr; return *this; }
+//	random_iter_wrapper operator++(int) { auto cpy = *this; ++*this; return cpy; }
+//	random_iter_wrapper& operator-=(difference_type d) { _repr -= d; return *this; }
+//	random_iter_wrapper operator-(difference_type d) { return { _repr - d }; }
+//	random_iter_wrapper& operator--() { _repr--; return *this; }
+//	random_iter_wrapper operator--(int) { auto cpy = *this; --*this; return cpy; }
+	difference_type operator-(const random_iter_wrapper& other) const { return this->_repr - other._repr; }
+	bool operator<(const random_iter_wrapper& other) const { return this->_repr < other._repr; }
+	bool operator<=(const random_iter_wrapper& other) const { return this->_repr <= other._repr; }
+	bool operator>(const random_iter_wrapper& other) const { return this->_repr > other._repr; }
+	bool operator>=(const random_iter_wrapper& other) const { return this->_repr >= other._repr; }
+	bool operator!=(const random_iter_wrapper& other) const { return this->_repr != other._repr; }
+	bool operator==(const random_iter_wrapper& other) const { return this->_repr == other._repr; }
+protected:
+	using Base::_repr;
+};
+
+
+
+struct const_dna_bitstring_iter_base {
+public:
 	using difference_type = ptrdiff_t;
 	using value_type = nuc_t;
 
 	struct reference {
 		operator nuc_t() {
 			ksize_t offset = _ptr & 0b11;
-			uint8_t* ptr = reinterpret_cast<uint8_t*>(_ptr >> 2);
+			auto ptr = reinterpret_cast<const uint8_t* restrict>(_ptr >> 2);
 			return (*ptr >> offset) & 0b11;
 		}
-
-		reference& operator=(nuc_t n) {
-			ksize_t offset = _ptr & 0b11;
-			uint8_t* ptr = reinterpret_cast<uint8_t*>(_ptr >> 2);
-			*ptr |= uint8_t(n) << offset;
-			return *this;
-		}
 	protected:
-		friend class DnaBitStringInterator;
+		template<typename C> friend struct random_iter_wrapper;
 		reference(uintptr_t ptr) : _ptr(ptr) {}
 		uintptr_t _ptr;
 	};
 
-	explicit DnaBitStringInterator(const uint8_t* ptr, ksize_t off=0) : _ptr((reinterpret_cast<uintptr_t>(ptr) << 2) + off) {}
-	DnaBitStringInterator(const DnaBitStringInterator&) = default;
-	DnaBitStringInterator& operator=(const DnaBitStringInterator&) = default;
-	DnaBitStringInterator(DnaBitStringInterator&&) = default;
-	DnaBitStringInterator& operator=(DnaBitStringInterator&&) = default;
+	template<typename It>
+	const_dna_bitstring_iter_base(It it, ksize_t off=0) : _repr((reinterpret_cast<uintptr_t>(&*(it)) << 2) + off) {}
 
-	reference operator*() const { return { _ptr }; }
-	reference operator[](difference_type d) const { return { _ptr + d }; }
-	DnaBitStringInterator& operator+=(difference_type d) { _ptr += d; return *this; }
-	DnaBitStringInterator& operator++() { ++_ptr; return *this; }
-	DnaBitStringInterator operator++(int) { return { _ptr+1 }; }
-	DnaBitStringInterator& operator-=(difference_type d) { _ptr -= d; return *this; }
-	DnaBitStringInterator& operator--() { _ptr--; return *this; }
-	DnaBitStringInterator operator--(int) { return { _ptr-1 }; }
-	difference_type operator-(const DnaBitStringInterator& other) const { return this->_ptr - other._ptr; }
-	bool operator<(const DnaBitStringInterator& other) const { return this->_ptr < other._ptr; }
-	bool operator!=(const DnaBitStringInterator& other) const { return this->_ptr != other._ptr; }
-	bool operator==(const DnaBitStringInterator& other) const { return this->_ptr == other._ptr; }
 protected:
-	DnaBitStringInterator(uintptr_t ptr) : _ptr(ptr) {}
-	uintptr_t _ptr;
+	const_dna_bitstring_iter_base(uintptr_t repr) : _repr(repr) {}
+	uintptr_t _repr;
 };
 
-
-
-struct DnaCharStringIterator {
-	struct reference {
-
+struct dna_bitstring_iter_base : public const_dna_bitstring_iter_base {
+	struct reference : public const_dna_bitstring_iter_base::reference {
+		reference& operator=(nuc_t n) {
+			ksize_t offset = _ptr & 0b11;
+			auto ptr = reinterpret_cast<uint8_t* restrict>(_ptr >> 2);
+			*ptr |= uint8_t(n) << offset;
+			return *this;
+		}
+	protected:
+		using const_dna_bitstring_iter_base::reference::reference;
 	};
+
+	dna_bitstring_iter_base(const const_dna_bitstring_iter_base& x) : const_dna_bitstring_iter_base(x) {}
+	template<typename It>
+	dna_bitstring_iter_base(It it, ksize_t off=0) : const_dna_bitstring_iter_base(it, off) {}
 };
+
+
+
+template<typename _repr_t>
+struct dna_ascii_iter_base {
+	using difference_type = ptrdiff_t;
+	using value_type = nuc_t;
+	struct reference {
+		operator nuc_t() const {
+			return nuc2int(*_ptr);
+		}
+
+		const reference& operator=(nuc_t n) const {
+			assume(n < 4, "Invalid nucleotide code %u", unsigned(n));
+			*const_cast<char*>(this->_ptr) = "ACTG"[n];
+		}
+	protected:
+		template<typename C> friend struct random_iter_wrapper;
+		reference(_repr_t ptr) : _ptr(ptr) {}
+		const _repr_t _ptr;
+	};
+
+
+	dna_ascii_iter_base(_repr_t ptr) : _repr(ptr) {}
+protected:
+	_repr_t _repr;
+};
+
+
+
+template<typename R, typename _iterator_wrapper, typename _const_iterator_wrapper>
+struct wrapped_range {
+private:
+	using range_t = typename std::remove_reference<R>::type;
+public:
+	using iterator = typename std::conditional<std::is_const<range_t>::value, _const_iterator_wrapper, _iterator_wrapper>::type;
+	using const_iterator = _const_iterator_wrapper;
+	using element_type = typename iterator::value_type;
+	using reference = typename iterator::reference;
+	using const_reference = typename const_iterator::reference;
+	using size_type = typename range_t::size_type;
+
+	const_iterator begin() const { return const_iterator(repr.begin()); }
+	iterator begin() { return iterator(repr.begin()); }
+	const_iterator end() const { return const_iterator(repr.end()); }
+	iterator end() { return iterator(repr.end()); }
+	const_reference operator[](size_type i) const {
+		assume(repr.begin() + i < repr.end(), "Past the end index");
+		return *const_iterator(repr.begin() + i);
+	}
+	reference operator[](size_type i)  {
+		assume(repr.begin() + i < repr.end(), "Past the end index");
+		return *iterator(repr.begin() + i);
+	}
+	size_type size() const { return end() - begin(); }
+
+	template<typename _R>
+	wrapped_range(_R&& r) : repr(std::forward<_R>(r)) {}
+	wrapped_range(const wrapped_range&) = default;
+	wrapped_range(wrapped_range&&) = default;
+	wrapped_range& operator=(const wrapped_range&) = default;
+	wrapped_range& operator=(wrapped_range&&) = default;
+
+	operator range_t&() { return repr; }
+	operator const range_t&() const { return repr; }
+
+	R repr; // left public for brace initialization
+};
+
+}
+
+using dna_bitstring_iter = details::random_iter_wrapper<details::dna_bitstring_iter_base>;
+using const_dna_bitstring_iter = details::random_iter_wrapper<details::const_dna_bitstring_iter_base>;
+template<typename It> using dna_ascii_iter = details::random_iter_wrapper<details::dna_ascii_iter_base<It>>;
+template<typename R> using dna_bitstring_range = details::wrapped_range<R, dna_bitstring_iter, const_dna_bitstring_iter>;
+template<typename R> using dna_ascii_range = details::wrapped_range<R,
+	dna_ascii_iter<typename std::remove_reference<R>::type::iterator>,
+	dna_ascii_iter<typename std::remove_reference<R>::type::const_iterator> >;
+
+
+template<typename R, typename W> struct window_range {
+	template<typename _W>
+	window_range(const R& r, _W&& w) :  _win(std::forward<_W>(w)),  _it(_win.fill(r.begin())), _end(r.end()) {}
+
+	using inner_iterator = typename R::const_iterator;
+
+
+	struct iterator {
+		iterator& operator++() {
+			auto& it = _r._it;
+			++it;
+			if(it != _r._end)
+				_r._win.push_back(*it);
+			return *this;
+		}
+		bool operator!=(const iterator& other) const {
+			assume(&other._r == &_r, "Compare iterators from different window ranges");
+			return _r._it != other._r._end;
+		}
+		const W& operator*() const { return _r._win; }
+		window_range& _r;
+	};
+
+	iterator begin() { return {*this}; }
+	iterator end() { return {*this}; }
+
+	W _win;
+	inner_iterator _it;
+	const inner_iterator _end;
+};
+
+
+
+
 
 struct LexicoCanonical {
-	template<typename T>
-	T operator()(const T& x, const T& y) { return x < y ? x : y; }
+	template<typename T> static pure_fun
+	T canonize_bidir(T x, T y)
+	{ return x < y ? x : y; }
+
+	template<typename T> static pure_fun
+	T canonize(T x, ksize_t k)
+	{ return canonize_bidir(x, rcb(x, k)); }
+
+	template<typename T> static pure_fun
+	T uncanonize(T x)
+	{ return x; }
 };
 
+
+inline pure_fun int popcount(unsigned x) { return __builtin_popcount(x); }
+inline pure_fun int popcount(unsigned long x) { return __builtin_popcountl(x); }
+inline pure_fun int popcount(unsigned long long x) { return __builtin_popcountll(x); }
+
 struct ParityCanonical {
-	unsigned operator()(unsigned x, unsigned y) const
-	{ return (__builtin_popcount(x) & 1 ? x : y) >> 1; }
-	unsigned long operator()(unsigned long x, unsigned long y) const
-	{ return (__builtin_popcountl(x) & 1 ? x : y) >> 1; }
-	unsigned long long operator()(unsigned long long x, unsigned long long y) const
-	{ return (__builtin_popcountll(x) & 1 ? x : y) >> 1; }
+	template<typename T> static pure_fun
+	T canonize_bidir(T x, T y)
+	{ return (popcount(x) & 1 ? x : y) >> 1; }
+
+	template<typename T> static pure_fun
+	T canonize(T x, ksize_t k)
+	{ return (popcount(x) & 1 ? x : rcb(x, k)) >> 1; }
+
+	template<typename T> static pure_fun
+	T uncanonize(T x)
+	{ return (popcount(x) & 1 ? 0 : 1) | (x << 1); }
 };
 
 
@@ -314,14 +499,18 @@ struct SlidingKMer : private Canonical {
 		assume(k <= sizeof(kmer_t)*4, "k too large");
 	}
 
-	void fill(const char* str) {
-		for(ksize_t i = 0 ; i < _k ; i++) {
-			nuc_t nuc = nuc2int(str[i]);
-			_forward = (_forward << 2) | nuc;
-			_reverse = (_reverse >> 2) | (kmer_t(0b10 ^ nuc) << _left_bitpos);
+
+	template<typename It>
+	It fill(It it) {
+		_reverse = 0;
+		_forward = 0;
+
+		for(ksize_t i = 1 ; i < _k ; ++i, ++it) {
+			_push_back(*it);
 		}
-		_forward &= _mask;
+		_push_back(*it);
 		check();
+		return it;
 	}
 
 	void set_forward(kmer_t kmer) {
@@ -338,15 +527,13 @@ struct SlidingKMer : private Canonical {
 
 	void push_back(nuc_t nuc) {
 		check_nuc(nuc);
-		_forward = ((_forward << 2) & _mask) | nuc;
-		_reverse = (_reverse >> 2) | (kmer_t(0b10 ^ nuc) << _left_bitpos);
+		_push_back(nuc);
 		check();
 	}
 
 	void push_front(nuc_t nuc) {
 		check_nuc(nuc);
-		_forward = (_forward >> 2) | (kmer_t(nuc) << _left_bitpos);
-		_reverse = ((_reverse << 2) & _mask) | (0b10 ^ nuc);
+		_push_front(nuc);
 		check();
 	}
 
@@ -358,9 +545,17 @@ struct SlidingKMer : private Canonical {
 	const kmer_t& forward() const { return _forward; }
 	const kmer_t& reverse() const { return _reverse; }
 	kmer_t canon() const
-	{ return Canonical::operator()(_forward, _reverse); }
+	{ return Canonical::canonize_bidir(_forward, _reverse); }
 
 private:
+	void _push_back(nuc_t nuc) {
+		_forward = ((_forward << 2) & _mask) | nuc;
+		_reverse = (_reverse >> 2) | (kmer_t(0b10 ^ nuc) << _left_bitpos);
+	}
+	void _push_front(nuc_t nuc) {
+		_forward = (_forward >> 2) | (kmer_t(nuc) << _left_bitpos);
+		_reverse = ((_reverse << 2) & _mask) | (0b10 ^ nuc);
+	}
 	void check_nuc(nuc_t nuc) const {
 		assume(nuc < 4, "Invalid nuclotide code %u", unsigned(nuc));
 	}
@@ -375,6 +570,11 @@ private:
 	const ksize_t _k;
 	bitsize_t _left_bitpos;
 };
+
+
+
+template<typename kmer_t>
+window_range<dna_ascii_range<const std::string&>, SlidingKMer<kmer_t, LexicoCanonical>> iter_kmers(const std::string& str, ksize_t k) { return {str,  k}; };
 
 
 
@@ -577,6 +777,7 @@ private:
 			assume(_ring.front().pos > rec.pos - _w, "WTF");
 		}
 		// return true = 8.3%
+		return false;
 	}
 
 
@@ -588,17 +789,17 @@ private:
 
 
 template<typename Canonical=ParityCanonical>
-inline minimizer_t minimizer_naive(kmer_t seq, ksize_t k, ksize_t m, const Canonical& is_canonical={}) {
+inline minimizer_t minimizer_naive(kmer_t seq, ksize_t k, ksize_t m) {
 	Pow2<kmer_t> mask(2*m);
 	uint32_t mini,mmer;
 	mmer=minimizer_t(seq)%mask;
-	mmer=is_canonical(mmer, rcb(mmer,m));
+	mmer=Canonical::canonize(mmer, k);
 	mini=mmer;
 	int32_t hash_mini = revhash(mini);
 	for(uint i(1);i<=uint(k-m);i++){
 		seq>>=2;
 		mmer=minimizer_t(seq)%mask;
-		mmer=is_canonical(mmer, rcb(mmer,m));
+		mmer=Canonical::canonize(mmer, k);
 		int32_t hash = revhash(mmer);
 		if(hash_mini>hash){
 			mini=mmer;
